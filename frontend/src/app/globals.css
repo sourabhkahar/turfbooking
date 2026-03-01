@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+:root {
+  --accent: #22c55e;
+  --accent-dark: #16a34a;
+  --bg-dark: #0d0d1a;
+  --bg-card: rgba(255,255,255,0.04);
+  --border: rgba(255,255,255,0.08);
+}
+
+body {
+  background: var(--bg-dark);
+  color: #e2e8f0;
+  min-height: 100vh;
+}
+
+.glass-card {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  backdrop-filter: blur(12px);
+  border-radius: 16px;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: white;
+  font-weight: 600;
+  padding: 10px 24px;
+  border-radius: 10px;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 25px rgba(34,197,94,0.35);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: white;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1.5px solid #22c55e;
+  color: #22c55e;
+  font-weight: 600;
+  padding: 10px 24px;
+  border-radius: 10px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.btn-outline:hover {
+  background: rgba(34,197,94,0.1);
+}
+
+.input-field {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #e2e8f0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  width: 100%;
+  font-size: 0.95rem;
+  transition: border-color 0.2s;
+  outline: none;
+}
+
+.input-field:focus {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34,197,94,0.1);
+}
+
+.input-field::placeholder { color: rgba(255,255,255,0.35); }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-green { background: rgba(34,197,94,0.15); color: #22c55e; }
+.badge-yellow { background: rgba(234,179,8,0.15); color: #eab308; }
+.badge-red { background: rgba(239,68,68,0.15); color: #ef4444; }
+.badge-gray { background: rgba(148,163,184,0.15); color: #94a3b8; }
+
+/* Slot grid */
+.slot-available { background: rgba(34,197,94,0.12); border: 1.5px solid rgba(34,197,94,0.4); color: #22c55e; }
+.slot-booked { background: rgba(239,68,68,0.12); border: 1.5px solid rgba(239,68,68,0.3); color: #ef4444; cursor: not-allowed; }
+.slot-blocked { background: rgba(148,163,184,0.1); border: 1.5px dashed rgba(148,163,184,0.3); color: #64748b; cursor: not-allowed; }
+.slot-selected { background: rgba(34,197,94,0.35); border: 2px solid #22c55e; color: #fff; }
+
+.animate-fade-in { animation: fadeIn 0.4s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
