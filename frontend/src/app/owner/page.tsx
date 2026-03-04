@@ -1,13 +1,18 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
-interface Turf { id: number; name: string; location: string; city: string; sport_type: string; status: string; base_price: number; total_bookings: number; }
+interface Turf { id: number; name: string; location: string; city: string; sport_type: string; status: string; base_price: number; total_bookings: number; part_payment_percentage?: number; }
 interface Slot { id: number; date: string; start_time: string; end_time: string; status: string; block_reason?: string; }
-interface Booking { id: number; customer_name: string; customer_email: string; booking_date: string; start_time: string; end_time: string; total_amount: number; status: string; }
+interface Booking {
+    id: number; customer_name: string; customer_email: string; booking_date: string;
+    start_time: string; end_time: string; total_amount: number; paid_amount: number;
+    remaining_amount: number; status: string; payment_status: string; payment_method: string;
+}
 
 export default function OwnerDashboard() {
     const { user, logout } = useAuth();
@@ -21,26 +26,32 @@ export default function OwnerDashboard() {
     const [loading, setLoading] = useState(false);
 
     // Forms
-    const [turfForm, setTurfForm] = useState({ name: '', description: '', location: '', city: '', sport_type: 'Football', facilities: '' });
+    const [turfForm, setTurfForm] = useState({ name: '', description: '', location: '', city: '', sport_type: 'Football', facilities: '', part_payment_percentage: '0' });
+
     const [bulkForm, setBulkForm] = useState({ start_hour: 6, end_hour: 22, slot_duration: 60 });
     const [priceForm, setPriceForm] = useState({ rule_type: 'base', price_per_hour: '', label: '', start_time: '', end_time: '', day_of_week: '' });
     const [linkForm, setLinkForm] = useState({ date: new Date().toISOString().split('T')[0], start_time: '', end_time: '', price: '', expires_in_minutes: 10 });
     const [generatedLink, setGeneratedLink] = useState<{ url?: string; link?: string; token: string; expires_at: string } | null>(null);
     const [cancelConfirm, setCancelConfirm] = useState<number | null>(null);
 
+    const fetchMyTurfs = useCallback(async () => {
+        try {
+            const { data } = await api.get('/turfs/owner/my');
+            setTurfs(data);
+            setSelectedTurf(prev => {
+                if (data.length > 0 && !prev) return data[0].id;
+                return prev;
+            });
+        } catch { toast.error('Failed to load turfs'); }
+    }, []);
     useEffect(() => {
         if (!user) return router.push('/login');
         if (user.role !== 'owner') return router.push('/');
         fetchMyTurfs();
-    }, [user]);
+    }, [user, fetchMyTurfs, router]);
 
-    const fetchMyTurfs = async () => {
-        try {
-            const { data } = await api.get('/turfs/owner/my');
-            setTurfs(data);
-            if (data.length > 0 && !selectedTurf) setSelectedTurf(data[0].id);
-        } catch { toast.error('Failed to load turfs'); }
-    };
+
+
 
     const fetchSlots = async () => {
         if (!selectedTurf) return;
@@ -69,9 +80,14 @@ export default function OwnerDashboard() {
     const submitTurf = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            await api.post('/turfs', { ...turfForm, facilities: turfForm.facilities.split(',').map(f => f.trim()) });
+            await api.post('/turfs', {
+                ...turfForm,
+                facilities: turfForm.facilities.split(',').map(f => f.trim()),
+                part_payment_percentage: parseInt(turfForm.part_payment_percentage) || 0
+            });
             toast.success('Turf submitted for admin approval!');
-            setTurfForm({ name: '', description: '', location: '', city: '', sport_type: 'Football', facilities: '' });
+            setTurfForm({ name: '', description: '', location: '', city: '', sport_type: 'Football', facilities: '', part_payment_percentage: '0' });
+
             fetchMyTurfs();
             setTab('turfs');
         } catch (err: any) { toast.error(err.response?.data?.message || 'Error creating turf'); }
@@ -119,7 +135,18 @@ export default function OwnerDashboard() {
         } catch (err: any) { toast.error(err.response?.data?.message || 'Error generating link'); }
     };
 
+    const settleBackup = async (id: number) => {
+        try {
+            await api.patch(`/payment/mark-as-paid/${id}`);
+            toast.success('Payment settled successfully');
+            fetchBookings();
+        } catch (err: any) {
+            toast.error(err.response?.data?.message || 'Error settling payment');
+        }
+    };
+
     const cancelBooking = async (id: number) => {
+
         try {
             await api.patch(`/bookings/${id}/cancel`, { reason: 'Cancelled by owner' });
             toast.success('Booking cancelled successfully');
@@ -252,11 +279,13 @@ export default function OwnerDashboard() {
                                     onChange={e => setTurfForm({ ...turfForm, facilities: e.target.value })} />
                             </div>
                             <div>
-                                <label className="block text-sm text-slate-300 mb-2">Description</label>
-                                <textarea className="input-field h-24 resize-none" placeholder="Describe your turf..."
-                                    value={turfForm.description} onChange={e => setTurfForm({ ...turfForm, description: e.target.value })} />
+                                <label className="block text-sm text-slate-300 mb-2">Advance Payment required? (%)</label>
+                                <input type="number" min="0" max="100" className="input-field" placeholder="e.g. 20 (set to 0 for full payment only)"
+                                    value={turfForm.part_payment_percentage} onChange={e => setTurfForm({ ...turfForm, part_payment_percentage: e.target.value })} />
+                                <p className="text-xs text-slate-500 mt-1">If set, customers can pay this % online and the rest in cash at the venue.</p>
                             </div>
                             <button type="submit" className="btn-primary w-full justify-center py-3">Submit for Approval →</button>
+
                         </form>
                     </div>
                 </div>
@@ -392,8 +421,9 @@ export default function OwnerDashboard() {
                         <table className="w-full">
                             <thead>
                                 <tr className="border-b border-white/10 text-left text-slate-400 text-sm">
-                                    {['Customer', 'Date', 'Time', 'Amount', 'Status'].map(h => <th key={h} className="pb-4 pr-6 font-medium">{h}</th>)}
+                                    {['Customer', 'Date', 'Time', 'Paid / Total', 'Payment Status', 'Action'].map(h => <th key={h} className="pb-4 pr-6 font-medium">{h}</th>)}
                                 </tr>
+
                             </thead>
                             <tbody className="divide-y divide-white/5">
                                 {bookings.map(b => (
@@ -404,15 +434,35 @@ export default function OwnerDashboard() {
                                         </td>
                                         <td className="py-4 pr-6 text-slate-300">{b.booking_date}</td>
                                         <td className="py-4 pr-6 text-slate-300">{b.start_time?.slice(0, 5)} – {b.end_time?.slice(0, 5)}</td>
-                                        <td className="py-4 pr-6 text-green-400 font-semibold">₹{Number(b.total_amount).toLocaleString()}</td>
                                         <td className="py-4 pr-6">
-                                            <span className={`badge ${b.status === 'confirmed' ? 'badge-green' : b.status === 'cancelled' ? 'badge-red' : 'badge-yellow'}`}>{b.status}</span>
-                                            {b.status === 'confirmed' && (
-                                                <button onClick={() => setCancelConfirm(b.id)} className="block mt-2 text-red-400 hover:text-red-300 text-xs underline">
-                                                    Cancel booking
-                                                </button>
-                                            )}
+                                            <div className="font-semibold text-white">₹{Number(b.paid_amount).toLocaleString()} / <span className="text-slate-500">₹{Number(b.total_amount).toLocaleString()}</span></div>
+                                            {b.remaining_amount > 0 && <div className="text-xs text-red-400 mt-1">Due: ₹{Number(b.remaining_amount).toLocaleString()}</div>}
                                         </td>
+                                        <td className="py-4 pr-6">
+                                            <div className="flex flex-col gap-1 items-start">
+                                                <span className={`badge ${b.status === 'confirmed' ? 'badge-green' : b.status === 'cancelled' ? 'badge-red' : 'badge-yellow'}`}>{b.status}</span>
+                                                <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${b.payment_status === 'fully_paid' ? 'bg-green-500/20 text-green-400' :
+                                                    b.payment_status === 'partially_paid' ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'
+                                                    }`}>
+                                                    {b.payment_status.replace('_', ' ')}
+                                                </span>
+                                            </div>
+                                        </td>
+                                        <td className="py-4 pr-6">
+                                            <div className="flex flex-col gap-2">
+                                                {b.status === 'confirmed' && b.payment_status !== 'fully_paid' && (
+                                                    <button onClick={() => settleBackup(b.id)} className="btn-primary text-[10px] py-1 px-3">
+                                                        Settle Cash
+                                                    </button>
+                                                )}
+                                                {b.status === 'confirmed' && (
+                                                    <button onClick={() => setCancelConfirm(b.id)} className="text-red-400 hover:text-red-300 text-[10px] underline text-left">
+                                                        Cancel booking
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+
                                     </tr>
                                 ))}
                                 {bookings.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-slate-400">No bookings yet</td></tr>}

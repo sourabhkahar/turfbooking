@@ -67,13 +67,14 @@ router.post('/', authenticate, requireOwner, [
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { name, description, location, city, sport_type, facilities, images } = req.body;
+    const { name, description, location, city, sport_type, facilities, images, part_payment_percentage } = req.body;
     try {
         const [result] = await db.query(
-            'INSERT INTO turfs (owner_id, name, description, location, city, sport_type, facilities, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO turfs (owner_id, name, description, location, city, sport_type, facilities, images, part_payment_percentage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [req.user.id, name, description || null, location, city, sport_type || 'Football',
-            JSON.stringify(facilities || []), JSON.stringify(images || [])]
+            JSON.stringify(facilities || []), JSON.stringify(images || []), part_payment_percentage || 0]
         );
+
         res.status(201).json({ message: 'Turf submitted for approval', turf_id: result.insertId });
     } catch (err) {
         console.error(err);
@@ -89,11 +90,12 @@ router.put('/:id', authenticate, requireOwner, async (req, res) => {
         if (turf[0].owner_id !== req.user.id && req.user.role !== 'super_admin') {
             return res.status(403).json({ message: 'Not your turf' });
         }
-        const { name, description, location, city, sport_type, facilities, images } = req.body;
+        const { name, description, location, city, sport_type, facilities, images, part_payment_percentage } = req.body;
         await db.query(
-            'UPDATE turfs SET name=?, description=?, location=?, city=?, sport_type=?, facilities=?, images=? WHERE id=?',
-            [name, description, location, city, sport_type, JSON.stringify(facilities || []), JSON.stringify(images || []), req.params.id]
+            'UPDATE turfs SET name=?, description=?, location=?, city=?, sport_type=?, facilities=?, images=?, part_payment_percentage=? WHERE id=?',
+            [name, description, location, city, sport_type, JSON.stringify(facilities || []), JSON.stringify(images || []), part_payment_percentage || 0, req.params.id]
         );
+
         res.json({ message: 'Turf updated successfully' });
     } catch (err) {
         res.status(500).json({ message: 'Server error' });

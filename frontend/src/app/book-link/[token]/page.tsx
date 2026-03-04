@@ -1,10 +1,12 @@
-'use client';
-import { useEffect, useState, use } from 'react';
+import { useEffect, useState, use, useCallback } from 'react';
+
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import Script from 'next/script';
+
 
 interface LinkDetails {
     token: string;
@@ -28,21 +30,24 @@ export default function BookLinkPage({ params }: { params: Promise<{ token: stri
     const [error, setError] = useState('');
     const [booking, setBooking] = useState(false);
 
-    useEffect(() => {
-        fetchDetails();
-    }, [token]);
-
-    const fetchDetails = async () => {
+    const fetchDetails = useCallback(async () => {
         try {
             const { data } = await api.get(`/booking-links/${token}`);
             setDetails(data);
-        } catch (err: any) {
-            setError(err.response?.data?.message || 'Invalid or expired link');
-            toast.error(err.response?.data?.message || 'Failed to load link');
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'Invalid or expired link';
+            setError(message);
+            toast.error(message);
+
         } finally {
             setLoading(false);
         }
-    };
+    }, [token]);
+
+    useEffect(() => {
+        fetchDetails();
+    }, [fetchDetails]);
+
 
     const handleBook = async () => {
         if (!user) {
@@ -52,19 +57,65 @@ export default function BookLinkPage({ params }: { params: Promise<{ token: stri
 
         setBooking(true);
         try {
-            const { data } = await api.post(`/booking-links/${token}/book`);
-            toast.success(data.message || 'Booking confirmed!');
-            router.push('/customer'); // redirect to customer dashboard
-        } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Booking failed');
-            if (err.response?.data?.message === 'Link has expired') {
+            // 1. Initialize booking from link
+            const { data: bookingData } = await api.post(`/booking-links/${token}/book`);
+
+            // 2. Create Razorpay Order
+            const { data: orderData } = await api.post('/payment/create-order', {
+                amount: bookingData.amount_to_pay,
+                bookingId: bookingData.booking_id
+            });
+
+            // 3. Open Razorpay Checkout
+            const options = {
+                key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_placeholder',
+                amount: orderData.amount,
+                currency: "INR",
+                name: "Turf Booking",
+                description: `Special Link Booking for ${details?.turf_name}`,
+                order_id: orderData.id,
+                handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
+                    try {
+                        await api.post('/payment/verify', {
+                            ...response,
+                            bookingId: bookingData.booking_id
+                        });
+                        toast.success('🎉 Booking confirmed successfully!');
+                        router.push('/customer');
+                    } catch (verifyErr: unknown) {
+                        toast.error('Payment verification failed. Please contact support.');
+                        console.error('Verification error:', verifyErr);
+                    }
+
+                },
+
+                prefill: {
+                    name: user.name,
+                    email: user.email,
+                },
+                theme: { color: "#22c55e" },
+            };
+
+            const rzp = new (window as any).Razorpay(options);
+            rzp.on('payment.failed', function (response: { error: { description: string } }) {
+                toast.error(response.error.description);
+                setBooking(false);
+            });
+
+            rzp.open();
+
+        } catch (err: unknown) {
+            const message = (err as any).response?.data?.message || 'Booking failed';
+            toast.error(message);
+            if (message === 'Link has expired') {
                 setError('Link has expired');
                 setDetails(null);
             }
-        } finally {
             setBooking(false);
         }
+
     };
+
 
     if (loading) {
         return (
@@ -93,6 +144,8 @@ export default function BookLinkPage({ params }: { params: Promise<{ token: stri
 
     return (
         <div className="min-h-screen flex items-center justify-center px-4 py-16">
+            <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+
             <div className="glass-card p-8 w-full max-w-lg animate-fade-in relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 rounded-full blur-3xl"></div>
 

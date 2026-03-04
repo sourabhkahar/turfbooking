@@ -10,6 +10,8 @@ const pricingRoutes = require('./routes/pricing');
 const bookingRoutes = require('./routes/bookings');
 const adminRoutes = require('./routes/admin');
 const bookingLinksRoutes = require('./routes/bookingLinks');
+const paymentRoutes = require('./routes/payment');
+
 
 const app = express();
 
@@ -27,6 +29,8 @@ app.use('/api/pricing', pricingRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/booking-links', bookingLinksRoutes);
+app.use('/api/payment', paymentRoutes);
+
 
 // Health check
 app.get('/', (req, res) => res.json({ message: 'Turf Booking API is running', status: 'ok' }));

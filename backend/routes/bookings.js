@@ -9,11 +9,14 @@ const router = express.Router();
 router.post('/', authenticate, requireUser, [
     body('slot_id').isInt(),
     body('notes').optional().isString(),
+    body('payment_type').optional().isIn(['full', 'part']),
+
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { slot_id, notes } = req.body;
+    const { slot_id, notes, payment_type = 'full' } = req.body;
+
     const conn = await (require('../config/db')).getConnection();
     try {
         await conn.beginTransaction();
@@ -51,27 +54,47 @@ router.post('/', authenticate, requireUser, [
         const durationHours = ((endH * 60 + endM) - (startH * 60 + startM)) / 60;
         const totalAmount = pricePerHour * durationHours;
 
+        // Calculate payment details
+        let paidAmount = 0;
+        let remainingAmount = totalAmount;
+        let paymentStatus = 'unpaid';
+
+        if (payment_type === 'part' && turf.part_payment_percentage > 0) {
+            paidAmount = (totalAmount * turf.part_payment_percentage) / 100;
+            remainingAmount = totalAmount - paidAmount;
+            // The initial payment (advance) is still "unpaid" until Razorpay succeeds
+        } else {
+            paidAmount = totalAmount;
+            remainingAmount = 0;
+        }
+
         // Create booking
         const [result] = await conn.query(
             `INSERT INTO bookings (slot_id, user_id, turf_id, booking_date, start_time, end_time, 
-        duration_hours, price_per_hour, total_amount, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        duration_hours, price_per_hour, total_amount, paid_amount, remaining_amount, payment_type, payment_status, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [slot_id, req.user.id, slot.turf_id, slot.date, slot.start_time, slot.end_time,
-                durationHours, pricePerHour, totalAmount, notes || null]
+                durationHours, pricePerHour, totalAmount, 0, totalAmount, payment_type, 'unpaid', notes || null]
         );
+        // Note: We always start with 0 paid and total remaining until verification.
+        // We stores intended amounts in local vars for the response.
 
-        // Mark slot as booked
+        const bookingId = result.insertId;
+
+        // Mark slot as booked (or pending_payment if you want to be strict)
         await conn.query("UPDATE slots SET status = 'booked' WHERE id = ?", [slot_id]);
         await conn.commit();
 
         res.status(201).json({
-            message: 'Booking confirmed!',
-            booking_id: result.insertId,
+            message: 'Booking initialized. Proceed to payment.',
+            booking_id: bookingId,
             total_amount: totalAmount,
+            amount_to_pay: payment_type === 'part' ? (totalAmount * turf.part_payment_percentage / 100) : totalAmount,
             turf_name: turf.name,
             date: slot.date,
             time: `${slot.start_time} - ${slot.end_time}`
         });
+
     } catch (err) {
         await conn.rollback();
         console.error(err);

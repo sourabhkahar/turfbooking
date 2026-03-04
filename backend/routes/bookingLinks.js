@@ -162,11 +162,12 @@ router.post('/:token/book', authenticate, requireUser, async (req, res) => {
 
         const [bookResult] = await conn.query(
             `INSERT INTO bookings (slot_id, user_id, turf_id, booking_date, start_time, end_time, 
-            duration_hours, price_per_hour, total_amount, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            duration_hours, price_per_hour, total_amount, paid_amount, remaining_amount, payment_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [finalSlotId, req.user.id, linkData.turf_id, linkData.date, linkData.start_time, linkData.end_time,
-                durationHours, pricePerHour, totalAmount, 'Booked via temporary link']
+                durationHours, pricePerHour, totalAmount, 0, totalAmount, 'unpaid', 'Booked via temporary link']
         );
+
 
         // 4. Mark token as used
         if (linkData.slot_id) {
@@ -177,10 +178,12 @@ router.post('/:token/book', authenticate, requireUser, async (req, res) => {
         await conn.commit();
 
         res.status(201).json({
-            message: 'Booking confirmed!',
+            message: 'Booking initialized!',
             booking_id: bookResult.insertId,
-            total_amount: totalAmount
+            total_amount: totalAmount,
+            amount_to_pay: totalAmount // Booking links are usually full payment or as specified
         });
+
 
     } catch (err) {
         await conn.rollback();

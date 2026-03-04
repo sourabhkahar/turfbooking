@@ -4,8 +4,11 @@ import { useAuth } from '@/context/AuthContext';
 import { useRouter, useSearchParams } from 'next/navigation';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import Script from 'next/script';
 
-interface Turf { id: number; name: string; location: string; city: string; sport_type: string; owner_name: string; }
+
+interface Turf { id: number; name: string; location: string; city: string; sport_type: string; owner_name: string; part_payment_percentage?: number; }
+
 interface Slot { id: number; start_time: string; end_time: string; status: string; price_per_hour: number; }
 
 function BookPage() {
@@ -21,6 +24,8 @@ function BookPage() {
     const [loading, setLoading] = useState(false);
     const [booking, setBooking] = useState(false);
     const [notes, setNotes] = useState('');
+    const [paymentType, setPaymentType] = useState<'full' | 'part'>('full');
+
 
     useEffect(() => {
         if (!turfId) return;
@@ -49,17 +54,66 @@ function BookPage() {
         if (!user) return router.push('/login');
         if (!selectedSlot) return toast.error('Select a slot first');
         setBooking(true);
+
         try {
-            const { data } = await api.post('/bookings', { slot_id: selectedSlot.id, notes });
-            toast.success(`🎉 Booking confirmed! Total: ₹${data.total_amount}`);
-            router.push('/customer');
+            // 1. Initialize booking
+            const { data: bookingData } = await api.post('/bookings', {
+                slot_id: selectedSlot.id,
+                notes,
+                payment_type: paymentType
+            });
+
+            // 2. Create Razorpay Order
+            const { data: orderData } = await api.post('/payment/create-order', {
+                amount: bookingData.amount_to_pay,
+                bookingId: bookingData.booking_id
+            });
+
+            // 3. Open Razorpay Checkout
+            const options = {
+                key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_placeholder',
+                amount: orderData.amount,
+                currency: "INR",
+                name: "Turf Booking",
+                description: `Booking for ${turf?.name}`,
+                order_id: orderData.id,
+                handler: async function (response: any) {
+                    try {
+                        await api.post('/payment/verify', {
+                            ...response,
+                            bookingId: bookingData.booking_id
+                        });
+                        toast.success('🎉 Booking confirmed successfully!');
+                        router.push('/customer');
+                    } catch (err) {
+                        toast.error('Payment verification failed. Please contact support.');
+                    }
+                },
+                prefill: {
+                    name: user.name,
+                    email: user.email,
+                },
+                theme: { color: "#22c55e" },
+            };
+
+            const rzp = new (window as any).Razorpay(options);
+            rzp.on('payment.failed', function (response: any) {
+                toast.error(response.error.description);
+                setBooking(false);
+            });
+            rzp.open();
+
         } catch (err: any) {
             toast.error(err.response?.data?.message || 'Booking failed');
-        } finally { setBooking(false); }
+            setBooking(false);
+        }
     };
+
 
     return (
         <div className="max-w-6xl mx-auto px-4 py-10">
+            <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+
             {/* Turf header */}
             {turf && (
                 <div className="glass-card p-6 mb-8 animate-fade-in">
@@ -101,9 +155,9 @@ function BookPage() {
                                         disabled={!isAvailable}
                                         onClick={() => isAvailable && setSelectedSlot(isSelected ? null : slot)}
                                         className={`p-3 rounded-xl text-xs font-semibold text-center transition-all border-2 ${isSelected ? 'slot-selected scale-105 shadow-lg shadow-green-500/20'
-                                                : slot.status === 'booked' ? 'slot-booked'
-                                                    : slot.status === 'blocked' ? 'slot-blocked'
-                                                        : 'slot-available hover:scale-105 cursor-pointer'
+                                            : slot.status === 'booked' ? 'slot-booked'
+                                                : slot.status === 'blocked' ? 'slot-blocked'
+                                                    : 'slot-available hover:scale-105 cursor-pointer'
                                             }`}>
                                         <div className="text-sm font-bold">{slot.start_time.slice(0, 5)}</div>
                                         <div className="text-xs opacity-70 my-1">–</div>
@@ -159,6 +213,26 @@ function BookPage() {
                                         value={notes} onChange={e => setNotes(e.target.value)} />
                                 </div>
 
+                                {turf && turf.part_payment_percentage ? turf.part_payment_percentage > 0 && (
+                                    <div className="p-4 rounded-xl border border-white/10 bg-white/5">
+                                        <label className="text-sm font-bold text-white mb-3 block">Payment Option</label>
+                                        <div className="space-y-2">
+                                            <div onClick={() => setPaymentType('full')} className={`p-3 rounded-lg border-2 cursor-pointer transition-all flex justify-between items-center ${paymentType === 'full' ? 'border-green-500 bg-green-500/10' : 'border-white/5 bg-white/5'}`}>
+                                                <span className="text-sm">Full Payment</span>
+                                                <span className="text-xs font-bold">₹{(calcDuration(selectedSlot) * selectedSlot.price_per_hour).toLocaleString()}</span>
+                                            </div>
+                                            <div onClick={() => setPaymentType('part')} className={`p-3 rounded-lg border-2 cursor-pointer transition-all flex justify-between items-center ${paymentType === 'part' ? 'border-green-500 bg-green-500/10' : 'border-white/5 bg-white/5'}`}>
+                                                <div>
+                                                    <span className="text-sm block">Part Payment ({turf.part_payment_percentage}%)</span>
+                                                    <span className="text-[10px] text-slate-400">Rest pay at venue</span>
+                                                </div>
+                                                <span className="text-xs font-bold text-green-400">₹{((calcDuration(selectedSlot) * selectedSlot.price_per_hour * turf.part_payment_percentage) / 100).toLocaleString()}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : null}
+
+
                                 {user ? (
                                     <button onClick={confirmBooking} disabled={booking} className="btn-primary w-full justify-center py-3">
                                         {booking ? 'Confirming...' : '✅ Confirm Booking'}
@@ -169,7 +243,8 @@ function BookPage() {
                                     </button>
                                 )}
 
-                                <p className="text-xs text-slate-500 text-center">* Pay at venue — booking is confirmed instantly</p>
+                                <p className="text-xs text-slate-500 text-center">* {paymentType === 'full' ? 'Pay full amount online for instant confirmation' : 'Pay advance now, pay the rest in cash at the venue'}</p>
+
                             </div>
                         ) : (
                             <div className="text-center py-8">
