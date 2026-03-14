@@ -1,33 +1,50 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import Pagination from '@/components/Pagination';
 
-interface Booking { id: number; turf_name: string; location: string; city: string; booking_date: string; start_time: string; end_time: string; total_amount: number; status: string; payment_status: string; }
+interface Booking { id: number; turf_name: string; location: string; city: string; booking_date: string; start_time: string; end_time: string; total_amount: number; paid_amount: number; remaining_amount: number; status: string; payment_status: string; }
 
 export default function CustomerPage() {
     const { user, logout } = useAuth();
     const router = useRouter();
     const [bookings, setBookings] = useState<Booking[]>([]);
     const [loading, setLoading] = useState(true);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const itemsPerPage = 10;
+
+    const fetchBookings = useCallback(async () => {
+        setLoading(true);
+        try {
+            const { data: response } = await api.get(`/bookings/my?page=${currentPage}&limit=${itemsPerPage}`);
+            if (response.data) {
+                setBookings(response.data);
+                setTotalPages(response.totalPages);
+            } else {
+                setBookings(response);
+            }
+        } catch { toast.error('Failed to load bookings'); } finally { setLoading(false); }
+    }, [currentPage, itemsPerPage]);
+
+    useEffect(() => {
+        const load = async () => {
+            if (user) {
+                await fetchBookings();
+            }
+        };
+        load();
+    }, [user, fetchBookings]);
 
     useEffect(() => {
         if (!user) return router.push('/login');
         if (user.role === 'owner') return router.push('/owner');
         if (user.role === 'super_admin') return router.push('/admin');
-        fetchBookings();
-    }, [user]);
-
-    const fetchBookings = async () => {
-        setLoading(true);
-        try {
-            const { data } = await api.get('/bookings/my');
-            setBookings(data);
-        } catch { toast.error('Failed to load bookings'); } finally { setLoading(false); }
-    };
+    }, [user, router]);
 
     const cancelBooking = async (id: number) => {
         if (!confirm('Are you sure you want to cancel this booking?')) return;
@@ -35,11 +52,15 @@ export default function CustomerPage() {
             await api.patch(`/bookings/${id}/cancel`, {});
             toast.success('Booking cancelled');
             fetchBookings();
-        } catch (err: any) { toast.error(err.response?.data?.message || 'Error'); }
+        } catch (err: unknown) { 
+            const error = err as { response?: { data?: { message?: string } } };
+            toast.error(error.response?.data?.message || 'Error'); 
+        }
     };
 
-    const upcoming = bookings.filter(b => b.status === 'confirmed' && new Date(b.booking_date) >= new Date());
-    const past = bookings.filter(b => b.status !== 'confirmed' || new Date(b.booking_date) < new Date());
+    const today = new Date().toLocaleDateString('en-CA');
+    const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= today);
+    const past = bookings.filter(b => b.status !== 'confirmed' || b.booking_date < today);
 
     return (
         <div className="max-w-5xl mx-auto px-4 py-10">
@@ -87,6 +108,16 @@ export default function CustomerPage() {
                     )}
                 </div>
             )}
+
+            {!loading && totalPages > 1 && (
+                <div className="mt-8 flex justify-center">
+                    <Pagination 
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        onPageChange={setCurrentPage}
+                    />
+                </div>
+            )}
         </div>
     );
 }
@@ -102,14 +133,37 @@ function BookingCard({ b, onCancel, showCancel }: { b: Booking; onCancel: (id: n
                     <h3 className="font-bold text-white">{b.turf_name}</h3>
                     <p className="text-slate-400 text-sm">📍 {b.location}, {b.city}</p>
                     <p className="text-slate-400 text-sm mt-1">
-                        📅 {b.booking_date} &nbsp;·&nbsp; ⏰ {b.start_time?.slice(0, 5)} – {b.end_time?.slice(0, 5)}
+                        📅 {(() => {
+                            const [y, m, d] = b.booking_date.split('T')[0].split('-');
+                            return `${m}/${d}/${y}`;
+                        })()} &nbsp;·&nbsp; ⏰ {b.start_time?.slice(0, 5)} – {b.end_time?.slice(0, 5)}
                     </p>
                 </div>
             </div>
             <div className="flex items-center gap-4 flex-shrink-0">
                 <div className="text-right">
-                    <div className="text-green-400 font-bold text-xl">₹{Number(b.total_amount).toLocaleString()}</div>
-                    <span className={`badge ${b.status === 'confirmed' ? 'badge-green' : 'badge-red'}`}>{b.status}</span>
+                    <div className="text-green-400 font-bold text-xl">
+                        ₹{Number(b.paid_amount).toLocaleString()}
+                        <span className="text-slate-500 text-xs font-normal"> / ₹{Number(b.total_amount).toLocaleString()}</span>
+                    </div>
+                    {Number(b.remaining_amount) > 0 && (
+                        <div className="text-[10px] text-red-400 font-bold">Due: ₹{Number(b.remaining_amount).toLocaleString()}</div>
+                    )}
+                    <div className="flex flex-col gap-1 items-end mt-1">
+                        <span className={`badge ${
+                            b.status === 'confirmed' ? 'badge-green' : 
+                            b.status === 'pending' ? 'badge-yellow' : 
+                            b.status === 'failed' ? 'badge-gray' : 
+                            'badge-red'
+                        }`}>{b.status}</span>
+                        <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                            b.payment_status === 'fully_paid' ? 'bg-green-500/20 text-green-400' :
+                            b.payment_status === 'partially_paid' ? 'bg-blue-500/20 text-blue-400' : 
+                            'bg-red-500/20 text-red-400'
+                        }`}>
+                            {b.payment_status.replace('_', ' ')}
+                        </span>
+                    </div>
                 </div>
                 {showCancel && b.status === 'confirmed' && (
                     <button onClick={() => onCancel(b.id)} className="btn-danger text-xs">Cancel</button>

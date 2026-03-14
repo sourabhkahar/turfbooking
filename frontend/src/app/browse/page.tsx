@@ -1,8 +1,9 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import Pagination from '@/components/Pagination';
 
 interface Turf { id: number; name: string; location: string; city: string; sport_type: string; status: string; base_price: number; owner_name: string; facilities: string; }
 
@@ -12,21 +13,34 @@ export default function BrowsePage() {
     const [city, setCity] = useState('');
     const [sport, setSport] = useState('');
     const [loading, setLoading] = useState(true);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const itemsPerPage = 12;
 
-    const fetchTurfs = async () => {
+    const fetchTurfs = useCallback(async () => {
         setLoading(true);
         try {
-            const params: Record<string, string> = {};
+            const params: Record<string, string> = { page: currentPage.toString(), limit: itemsPerPage.toString() };
             if (search) params.search = search;
             if (city) params.city = city;
             if (sport) params.sport_type = sport;
             const qs = new URLSearchParams(params).toString();
-            const { data } = await api.get(`/turfs${qs ? '?' + qs : ''}`);
-            setTurfs(data);
+            const { data: response } = await api.get(`/turfs?${qs}`);
+            if (response.data) {
+                setTurfs(response.data);
+                setTotalPages(response.totalPages);
+            } else {
+                setTurfs(response);
+            }
         } catch { toast.error('Failed to load turfs'); } finally { setLoading(false); }
-    };
+    }, [currentPage, search, city, sport, itemsPerPage]);
 
-    useEffect(() => { fetchTurfs(); }, []);
+    useEffect(() => { fetchTurfs(); }, [fetchTurfs]);
+
+    const handleSearch = () => {
+        setCurrentPage(1);
+        fetchTurfs();
+    };
 
     const SPORTS = ['', 'Football', 'Cricket', 'Basketball', 'Tennis', 'Badminton', 'Hockey', 'Volleyball'];
 
@@ -57,7 +71,7 @@ export default function BrowsePage() {
                             {SPORTS.map(s => <option key={s} value={s}>{s || 'All Sports'}</option>)}
                         </select>
                     </div>
-                    <button onClick={fetchTurfs} className="btn-primary">Search</button>
+                    <button onClick={handleSearch} className="btn-primary">Search</button>
                 </div>
             </div>
 
@@ -78,33 +92,42 @@ export default function BrowsePage() {
                     <p className="text-slate-400 text-lg">No turfs found. Try a different search.</p>
                 </div>
             ) : (
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {turfs.map(t => {
-                        const facs = parseFacilities(t.facilities);
-                        return (
-                            <div key={t.id} className="glass-card p-6 group hover:border-green-500/30 transition-all duration-300">
-                                <div className="flex justify-between items-start mb-3">
-                                    <span className="text-xs font-semibold text-green-400 bg-green-400/10 px-2 py-1 rounded-full">{t.sport_type}</span>
-                                    {t.base_price && <span className="text-green-400 font-bold text-lg">₹{t.base_price}/hr</span>}
-                                </div>
-                                <h3 className="text-xl font-bold text-white mb-1 group-hover:text-green-400 transition-colors">{t.name}</h3>
-                                <p className="text-slate-400 text-sm mb-1">📍 {t.location}, {t.city}</p>
-                                <p className="text-slate-500 text-xs mb-4">👤 {t.owner_name}</p>
-                                {facs.length > 0 && (
-                                    <div className="flex flex-wrap gap-2 mb-4">
-                                        {facs.slice(0, 3).map((f: string) => (
-                                            <span key={f} className="text-xs bg-white/5 border border-white/10 px-2 py-1 rounded-full text-slate-400">{f}</span>
-                                        ))}
-                                        {facs.length > 3 && <span className="text-xs text-slate-500">+{facs.length - 3} more</span>}
+                <>
+                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+                        {turfs.map(t => {
+                            const facs = parseFacilities(t.facilities);
+                            return (
+                                <div key={t.id} className="glass-card p-6 group hover:border-green-500/30 transition-all duration-300">
+                                    <div className="flex justify-between items-start mb-3">
+                                        <span className="text-xs font-semibold text-green-400 bg-green-400/10 px-2 py-1 rounded-full">{t.sport_type}</span>
+                                        {t.base_price && <span className="text-green-400 font-bold text-lg">₹{t.base_price}/hr</span>}
                                     </div>
-                                )}
-                                <Link href={`/customer/book?turf_id=${t.id}`} className="btn-primary w-full justify-center text-sm py-2.5">
-                                    View & Book →
-                                </Link>
-                            </div>
-                        );
-                    })}
-                </div>
+                                    <h3 className="text-xl font-bold text-white mb-1 group-hover:text-green-400 transition-colors">{t.name}</h3>
+                                    <p className="text-slate-400 text-sm mb-1">📍 {t.location}, {t.city}</p>
+                                    <p className="text-slate-500 text-xs mb-4">👤 {t.owner_name}</p>
+                                    {facs.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mb-4">
+                                            {facs.slice(0, 3).map((f: string) => (
+                                                <span key={f} className="text-xs bg-white/5 border border-white/10 px-2 py-1 rounded-full text-slate-400">{f}</span>
+                                            ))}
+                                            {facs.length > 3 && <span className="text-xs text-slate-500">+{facs.length - 3} more</span>}
+                                        </div>
+                                    )}
+                                    <Link href={`/customer/book?turf_id=${t.id}`} className="btn-primary w-full justify-center text-sm py-2.5">
+                                        View & Book →
+                                    </Link>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <div className="mt-8">
+                        <Pagination 
+                            currentPage={currentPage}
+                            totalPages={totalPages}
+                            onPageChange={setCurrentPage}
+                        />
+                    </div>
+                </>
             )}
         </div>
     );

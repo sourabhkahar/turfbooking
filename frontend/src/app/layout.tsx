@@ -8,8 +8,8 @@ import Navbar from '@/components/Navbar';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'TurfBook — Book Your Game',
-  description: 'Find and book sports turfs near you. Cricket, Football, Basketball & more.',
+  title: 'TurfBook — Elite Cricket & Sports Turf Booking',
+  description: 'Book premium cricket turfs and sports facilities near you instantly. Professional pitches, night sessions, and seamless booking.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

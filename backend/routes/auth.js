@@ -66,6 +66,51 @@ router.post('/login', [
     }
 });
 
+// PATCH /api/auth/profile - Update profile
+router.patch('/profile', authenticate, [
+    body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
+    body('phone').optional().isString(),
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { name, phone } = req.body;
+    try {
+        await db.query(
+            'UPDATE users SET name = COALESCE(?, name), phone = COALESCE(?, phone) WHERE id = ?',
+            [name, phone, req.user.id]
+        );
+        const [updated] = await db.query('SELECT id, name, email, role, phone FROM users WHERE id = ?', [req.user.id]);
+        res.json({ message: 'Profile updated', user: updated[0] });
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// PATCH /api/auth/password - Change password
+router.patch('/password', authenticate, [
+    body('oldPassword').notEmpty().withMessage('Current password is required'),
+    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters'),
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { oldPassword, newPassword } = req.body;
+    try {
+        const [rows] = await db.query('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
+
+        const match = await bcrypt.compare(oldPassword, rows[0].password_hash);
+        if (!match) return res.status(400).json({ message: 'Incorrect current password' });
+
+        const newHash = await bcrypt.hash(newPassword, 10);
+        await db.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, req.user.id]);
+        res.json({ message: 'Password changed successfully' });
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
 // GET /api/auth/me
 router.get('/me', authenticate, async (req, res) => {
     try {

@@ -1,3 +1,4 @@
+'use client';
 import { useEffect, useState, use, useCallback } from 'react';
 
 import { useAuth } from '@/context/AuthContext';
@@ -35,7 +36,8 @@ export default function BookLinkPage({ params }: { params: Promise<{ token: stri
             const { data } = await api.get(`/booking-links/${token}`);
             setDetails(data);
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'Invalid or expired link';
+            const error = err as { response?: { data?: { message?: string } } };
+            const message = error.response?.data?.message || 'Invalid or expired link';
             setError(message);
             toast.error(message);
 
@@ -96,7 +98,17 @@ export default function BookLinkPage({ params }: { params: Promise<{ token: stri
                 theme: { color: "#22c55e" },
             };
 
-            const rzp = new (window as any).Razorpay(options);
+            const rzp = new (window as unknown as { Razorpay: new (o: any) => { open: () => void; on: (e: string, c: any) => void } }).Razorpay({
+                ...options,
+                modal: {
+                    ondismiss: async function () {
+                        setBooking(false);
+                        try {
+                            await api.post('/bookings/rollback', { booking_ids: [bookingData.booking_id] });
+                        } catch (e) { console.error('Rollback failed', e); }
+                    }
+                }
+            });
             rzp.on('payment.failed', function (response: { error: { description: string } }) {
                 toast.error(response.error.description);
                 setBooking(false);
@@ -105,7 +117,8 @@ export default function BookLinkPage({ params }: { params: Promise<{ token: stri
             rzp.open();
 
         } catch (err: unknown) {
-            const message = (err as any).response?.data?.message || 'Booking failed';
+            const error = err as { response?: { data?: { message?: string } } };
+            const message = error.response?.data?.message || 'Booking failed';
             toast.error(message);
             if (message === 'Link has expired') {
                 setError('Link has expired');

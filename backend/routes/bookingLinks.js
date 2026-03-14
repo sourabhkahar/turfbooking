@@ -58,6 +58,27 @@ router.post('/', authenticate, requireOwner, [
     }
 });
 
+// GET /api/booking-links - List links for a turf (owner only)
+router.get('/', authenticate, requireOwner, async (req, res) => {
+    const { turf_id } = req.query;
+    if (!turf_id) return res.status(400).json({ message: 'turf_id required' });
+
+    try {
+        const [links] = await db.query(`
+            SELECT bt.*, t.name as turf_name 
+            FROM booking_tokens bt
+            JOIN turfs t ON bt.turf_id = t.id
+            WHERE bt.turf_id = ? AND t.owner_id = ?
+            ORDER BY bt.created_at DESC
+        `, [turf_id, req.user.id]);
+
+        res.json(links);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
 // GET /api/booking-links/:token - Get booking link details
 router.get('/:token', async (req, res) => {
     try {
@@ -162,10 +183,10 @@ router.post('/:token/book', authenticate, requireUser, async (req, res) => {
 
         const [bookResult] = await conn.query(
             `INSERT INTO bookings (slot_id, user_id, turf_id, booking_date, start_time, end_time, 
-            duration_hours, price_per_hour, total_amount, paid_amount, remaining_amount, payment_status, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            duration_hours, price_per_hour, total_amount, paid_amount, remaining_amount, payment_status, status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [finalSlotId, req.user.id, linkData.turf_id, linkData.date, linkData.start_time, linkData.end_time,
-                durationHours, pricePerHour, totalAmount, 0, totalAmount, 'unpaid', 'Booked via temporary link']
+                durationHours, pricePerHour, totalAmount, 0, totalAmount, 'unpaid', 'pending', 'Booked via temporary link']
         );
 
 
@@ -180,6 +201,7 @@ router.post('/:token/book', authenticate, requireUser, async (req, res) => {
         res.status(201).json({
             message: 'Booking initialized!',
             booking_id: bookResult.insertId,
+            booking_ids: [bookResult.insertId],
             total_amount: totalAmount,
             amount_to_pay: totalAmount // Booking links are usually full payment or as specified
         });

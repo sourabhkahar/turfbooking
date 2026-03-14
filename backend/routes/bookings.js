@@ -5,9 +5,10 @@ const { authenticate, requireOwner, requireAdmin, requireUser } = require('../mi
 
 const router = express.Router();
 
-// POST /api/bookings — customer books a slot
+// POST /api/bookings — customer books one or more slots
 router.post('/', authenticate, requireUser, [
-    body('slot_id').isInt(),
+    body('slot_ids').optional().isArray(),
+    body('slot_id').optional().isInt(),
     body('notes').optional().isString(),
     body('payment_type').optional().isIn(['full', 'part']),
 
@@ -15,84 +16,99 @@ router.post('/', authenticate, requireUser, [
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { slot_id, notes, payment_type = 'full' } = req.body;
+    let { slot_id, slot_ids, notes, payment_type = 'full' } = req.body;
+
+    // Normalize to an array of slot_ids
+    if (!slot_ids && slot_id) slot_ids = [slot_id];
+    if (!slot_ids || !Array.isArray(slot_ids) || slot_ids.length === 0) {
+        return res.status(400).json({ message: 'No slots specified' });
+    }
 
     const conn = await (require('../config/db')).getConnection();
     try {
         await conn.beginTransaction();
 
-        // Lock the slot row
-        const [slots] = await conn.query('SELECT * FROM slots WHERE id = ? FOR UPDATE', [slot_id]);
-        if (slots.length === 0) { await conn.rollback(); return res.status(404).json({ message: 'Slot not found' }); }
-        const slot = slots[0];
+        const bookingIds = [];
+        let totalBookingAmount = 0;
+        let turfName = '';
+        let bookingDate = '';
+        const timeRanges = [];
+        let turfInfo = null;
 
-        if (slot.status !== 'available') {
-            await conn.rollback();
-            return res.status(409).json({ message: `Slot is ${slot.status}. Cannot book.` });
+        for (const sId of slot_ids) {
+            // Lock the slot row
+            const [slots] = await conn.query('SELECT * FROM slots WHERE id = ? FOR UPDATE', [sId]);
+            if (slots.length === 0) {
+                await conn.rollback();
+                return res.status(404).json({ message: `Slot ${sId} not found` });
+            }
+            const slot = slots[0];
+
+            if (slot.status !== 'available') {
+                await conn.rollback();
+                return res.status(409).json({ message: `Slot ${slot.start_time} is ${slot.status}. Cannot book.` });
+            }
+
+            // Get turf info (only once)
+            if (!turfInfo) {
+                const [turfs] = await conn.query('SELECT * FROM turfs WHERE id = ?', [slot.turf_id]);
+                turfInfo = turfs[0];
+                turfName = turfInfo.name;
+                bookingDate = slot.date;
+            }
+
+            // Calculate price
+            const [customPrice] = await conn.query(
+                `SELECT price_per_hour FROM pricing_rules WHERE turf_id = ? AND rule_type = 'custom'
+           AND start_time <= ? AND end_time >= ? ORDER BY id DESC LIMIT 1`,
+                [slot.turf_id, slot.start_time, slot.end_time]
+            );
+            const [basePrice] = await conn.query(
+                "SELECT price_per_hour FROM pricing_rules WHERE turf_id = ? AND rule_type = 'base' LIMIT 1",
+                [slot.turf_id]
+            );
+
+            const pricePerHour = customPrice[0]?.price_per_hour || basePrice[0]?.price_per_hour || 0;
+
+            // Calculate duration in hours
+            const [startH, startM] = slot.start_time.split(':').map(Number);
+            const [endH, endM] = slot.end_time.split(':').map(Number);
+            const durationHours = ((endH * 60 + endM) - (startH * 60 + startM)) / 60;
+            const totalAmount = pricePerHour * durationHours;
+
+            // Create booking row
+            const [result] = await conn.query(
+                `INSERT INTO bookings (slot_id, user_id, turf_id, booking_date, start_time, end_time, 
+            duration_hours, price_per_hour, total_amount, paid_amount, remaining_amount, payment_type, payment_status, status, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [sId, req.user.id, slot.turf_id, slot.date, slot.start_time, slot.end_time,
+                    durationHours, pricePerHour, totalAmount, 0, totalAmount, payment_type, 'unpaid', 'pending', notes || null]
+            );
+
+            const bId = result.insertId;
+            bookingIds.push(bId);
+            totalBookingAmount += totalAmount;
+            timeRanges.push(`${slot.start_time.slice(0, 5)}-${slot.end_time.slice(0, 5)}`);
+
+            // Mark slot as booked
+            await conn.query("UPDATE slots SET status = 'booked' WHERE id = ?", [sId]);
         }
 
-        // Get turf info
-        const [turfs] = await conn.query('SELECT * FROM turfs WHERE id = ?', [slot.turf_id]);
-        const turf = turfs[0];
-
-        // Calculate price
-        const [customPrice] = await conn.query(
-            `SELECT price_per_hour FROM pricing_rules WHERE turf_id = ? AND rule_type = 'custom'
-       AND start_time <= ? AND end_time >= ? ORDER BY id DESC LIMIT 1`,
-            [slot.turf_id, slot.start_time, slot.end_time]
-        );
-        const [basePrice] = await conn.query(
-            "SELECT price_per_hour FROM pricing_rules WHERE turf_id = ? AND rule_type = 'base' LIMIT 1",
-            [slot.turf_id]
-        );
-
-        const pricePerHour = customPrice[0]?.price_per_hour || basePrice[0]?.price_per_hour || 0;
-
-        // Calculate duration in hours
-        const [startH, startM] = slot.start_time.split(':').map(Number);
-        const [endH, endM] = slot.end_time.split(':').map(Number);
-        const durationHours = ((endH * 60 + endM) - (startH * 60 + startM)) / 60;
-        const totalAmount = pricePerHour * durationHours;
-
-        // Calculate payment details
-        let paidAmount = 0;
-        let remainingAmount = totalAmount;
-        let paymentStatus = 'unpaid';
-
-        if (payment_type === 'part' && turf.part_payment_percentage > 0) {
-            paidAmount = (totalAmount * turf.part_payment_percentage) / 100;
-            remainingAmount = totalAmount - paidAmount;
-            // The initial payment (advance) is still "unpaid" until Razorpay succeeds
-        } else {
-            paidAmount = totalAmount;
-            remainingAmount = 0;
-        }
-
-        // Create booking
-        const [result] = await conn.query(
-            `INSERT INTO bookings (slot_id, user_id, turf_id, booking_date, start_time, end_time, 
-        duration_hours, price_per_hour, total_amount, paid_amount, remaining_amount, payment_type, payment_status, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [slot_id, req.user.id, slot.turf_id, slot.date, slot.start_time, slot.end_time,
-                durationHours, pricePerHour, totalAmount, 0, totalAmount, payment_type, 'unpaid', notes || null]
-        );
-        // Note: We always start with 0 paid and total remaining until verification.
-        // We stores intended amounts in local vars for the response.
-
-        const bookingId = result.insertId;
-
-        // Mark slot as booked (or pending_payment if you want to be strict)
-        await conn.query("UPDATE slots SET status = 'booked' WHERE id = ?", [slot_id]);
         await conn.commit();
 
+        const amountToPay = payment_type === 'part' && turfInfo.part_payment_percentage > 0
+            ? (totalBookingAmount * turfInfo.part_payment_percentage / 100)
+            : totalBookingAmount;
+
         res.status(201).json({
-            message: 'Booking initialized. Proceed to payment.',
-            booking_id: bookingId,
-            total_amount: totalAmount,
-            amount_to_pay: payment_type === 'part' ? (totalAmount * turf.part_payment_percentage / 100) : totalAmount,
-            turf_name: turf.name,
-            date: slot.date,
-            time: `${slot.start_time} - ${slot.end_time}`
+            message: 'Bookings initialized. Proceed to payment.',
+            booking_ids: bookingIds,
+            booking_id: bookingIds[0], // For backward compatibility
+            total_amount: totalBookingAmount,
+            amount_to_pay: amountToPay,
+            turf_name: turfName,
+            date: bookingDate,
+            time: timeRanges.join(', ')
         });
 
     } catch (err) {
@@ -104,16 +120,28 @@ router.post('/', authenticate, requireUser, [
     }
 });
 
-// GET /api/bookings/my — customer's own bookings
 router.get('/my', authenticate, requireUser, async (req, res) => {
     try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = (page - 1) * limit;
+
+        const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM bookings WHERE user_id = ?', [req.user.id]);
+
         const [bookings] = await db.query(
             `SELECT b.*, t.name as turf_name, t.location, t.city
        FROM bookings b JOIN turfs t ON b.turf_id = t.id
-       WHERE b.user_id = ? ORDER BY b.booking_date DESC, b.start_time DESC`,
-            [req.user.id]
+       WHERE b.user_id = ? ORDER BY b.booking_date DESC, b.start_time DESC
+       LIMIT ? OFFSET ?`,
+            [req.user.id, limit, offset]
         );
-        res.json(bookings);
+        res.json({
+            data: bookings,
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit)
+        });
     } catch (err) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -182,6 +210,29 @@ router.patch('/:id/cancel', authenticate, requireUser, async (req, res) => {
         res.json({ message: 'Booking cancelled successfully' });
     } catch (err) {
         res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// POST /api/bookings/rollback — rollback unpaid initialization
+router.post('/rollback', authenticate, async (req, res) => {
+    const { booking_ids } = req.body;
+    if (!booking_ids || !Array.isArray(booking_ids)) return res.status(400).json({ message: 'No IDs provided' });
+
+    try {
+        // Only rollback if status is 'pending' and belongs to user
+        const [rows] = await db.query('SELECT slot_id FROM bookings WHERE id IN (?) AND user_id = ? AND status = ?', [booking_ids, req.user.id, 'pending']);
+        console.log(rows);
+        if (rows.length > 0) {
+            const slotIds = rows.map(b => b.slot_id);
+            await db.query("UPDATE slots SET status = 'available' WHERE id IN (?)", [slotIds]);
+            // Instead of deleting, we update status to 'failed' to keep the audit trail
+            await db.query("UPDATE bookings SET status = 'failed' WHERE id IN (?) AND status = ?", [booking_ids, 'pending']);
+        }
+
+        res.json({ message: 'Rollback successful' });
+    } catch (err) {
+        console.error('Rollback error:', err);
+        res.status(500).json({ message: 'Rollback failed' });
     }
 });
 

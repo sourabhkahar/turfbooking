@@ -1,187 +1,98 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/context/AuthContext';
-import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
-import Link from 'next/link';
-import toast from 'react-hot-toast';
+import { 
+    AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+    BarChart, Bar
+} from 'recharts';
+import { 
+    UsersIcon, 
+    TicketIcon, 
+    CurrencyRupeeIcon, 
+    ArrowTrendingUpIcon,
+    ServerIcon
+} from '@heroicons/react/24/outline';
 
-interface Stats { total_users: number; total_owners: number; total_turfs: number; pending_turfs: number; total_bookings: number; total_revenue: number; }
-interface Turf { id: number; name: string; owner_name: string; city: string; status: string; created_at: string; }
-interface User { id: number; name: string; email: string; role: string; status: string; }
+interface AdminStats {
+    summary: { total_users: number; total_turfs: number; total_bookings: number; total_revenue: number; };
+    charts: {
+        daily: { booking_date: string; revenue: number; count: number }[];
+        by_sport: { sport_type: string; count: number }[];
+    };
+}
 
-export default function AdminDashboard() {
-    const { user, logout } = useAuth();
-    const router = useRouter();
-    const [stats, setStats] = useState<Stats | null>(null);
-    const [turfs, setTurfs] = useState<Turf[]>([]);
-    const [users, setUsers] = useState<User[]>([]);
-    const [tab, setTab] = useState<'overview' | 'turfs' | 'users'>('overview');
-    const [loading, setLoading] = useState(false);
+export default function AdminOverview() {
+    const [stats, setStats] = useState<AdminStats | null>(null);
 
     useEffect(() => {
-        if (!user) return router.push('/login');
-        if (user.role !== 'super_admin') return router.push('/');
-        fetchStats();
-    }, [user]);
+        api.get('/admin/stats').then(({ data }) => setStats(data)).catch(() => {});
+    }, []);
 
-    const fetchStats = async () => {
-        try {
-            const { data } = await api.get('/admin/stats');
-            setStats(data);
-        } catch { toast.error('Failed to load stats'); }
-    };
-
-    const fetchTurfs = async () => {
-        setLoading(true);
-        try {
-            const { data } = await api.get('/admin/turfs');
-            setTurfs(data);
-        } catch { toast.error('Failed to load turfs'); } finally { setLoading(false); }
-    };
-
-    const fetchUsers = async () => {
-        setLoading(true);
-        try {
-            const { data } = await api.get('/admin/users');
-            setUsers(data);
-        } catch { toast.error('Failed to load users'); } finally { setLoading(false); }
-    };
-
-    const statusTurf = async (id: number, status: string) => {
-        try {
-            await api.patch(`/turfs/${id}/status`, { status });
-            toast.success(`Turf ${status}`);
-            fetchTurfs();
-        } catch { toast.error('Error updating turf'); }
-    };
-
-    const toggleUser = async (id: number, currentStatus: string) => {
-        const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
-        try {
-            await api.patch(`/admin/users/${id}/status`, { status: newStatus });
-            toast.success(`User ${newStatus}`);
-            fetchUsers();
-        } catch { toast.error('Error updating user'); }
-    };
-
-    const handleTab = (t: typeof tab) => {
-        setTab(t);
-        if (t === 'turfs') fetchTurfs();
-        if (t === 'users') fetchUsers();
-    };
-
-    const statCards = stats ? [
-        { label: 'Total Players', value: stats.total_users, icon: '👥', color: 'text-blue-400' },
-        { label: 'Turf Owners', value: stats.total_owners, icon: '🏟️', color: 'text-purple-400' },
-        { label: 'Total Turfs', value: stats.total_turfs, icon: '⚽', color: 'text-green-400' },
-        { label: 'Pending Approval', value: stats.pending_turfs, icon: '⏳', color: 'text-yellow-400' },
-        { label: 'Total Bookings', value: stats.total_bookings, icon: '📋', color: 'text-cyan-400' },
-        { label: 'Total Revenue', value: `₹${Number(stats.total_revenue).toLocaleString()}`, icon: '💰', color: 'text-green-400' },
-    ] : [];
+    if (!stats) return <div className="flex justify-center py-24"><div className="animate-pulse flex flex-col items-center gap-4"><ServerIcon className="w-12 h-12 text-blue-500/50" /><p className="text-slate-500 font-black text-[10px] tracking-widest uppercase">Syncing with Mainframe...</p></div></div>;
 
     return (
-        <div className="max-w-7xl mx-auto px-4 py-8">
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-                <div>
-                    <h1 className="text-3xl font-black text-white">Super Admin <span className="text-green-400">Panel</span></h1>
-                    <p className="text-slate-400 mt-1">Manage the entire platform</p>
-                </div>
-                <button onClick={() => { logout(); router.push('/'); }} className="btn-outline text-sm">Logout</button>
-            </div>
-
-            {/* Tabs */}
-            <div className="flex gap-2 mb-8 border-b border-white/10">
-                {(['overview', 'turfs', 'users'] as const).map(t => (
-                    <button key={t} onClick={() => handleTab(t)}
-                        className={`px-5 py-3 text-sm font-semibold capitalize transition-all border-b-2 ${tab === t ? 'border-green-400 text-green-400' : 'border-transparent text-slate-400 hover:text-white'}`}>
-                        {t === 'overview' ? '📊 Overview' : t === 'turfs' ? '🏟️ Turfs' : '👥 Users'}
-                    </button>
+        <div className="animate-fade-in space-y-12">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {[
+                    { label: "Total Network Users", val: stats.summary.total_users, color: "text-blue-400", bg: "bg-blue-400/5", icon: UsersIcon },
+                    { label: "Active Facilities", val: stats.summary.total_turfs, color: "text-purple-400", bg: "bg-purple-400/5", icon: TicketIcon },
+                    { label: "Platform Volume", val: stats.summary.total_bookings, color: "text-cyan-400", bg: "bg-cyan-400/5", icon: ArrowTrendingUpIcon },
+                    { label: "Gross Revenue", val: `₹${stats.summary.total_revenue.toLocaleString()}`, color: "text-emerald-400", bg: "bg-emerald-400/5", icon: CurrencyRupeeIcon },
+                ].map((card, i) => (
+                    <div key={i} className="glass-card p-8 border-l border-white/5 hover:border-blue-500/20 transition-all group">
+                        <div className="flex flex-col gap-6">
+                            <div className={`w-12 h-12 rounded-2xl ${card.bg} flex items-center justify-center group-hover:scale-110 transition-transform`}>
+                                <card.icon className={`w-6 h-6 ${card.color}`} />
+                            </div>
+                            <div>
+                                <h4 className="text-3xl font-black text-white tracking-tighter">{card.val}</h4>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mt-1">{card.label}</p>
+                            </div>
+                        </div>
+                    </div>
                 ))}
             </div>
 
-            {/* Overview */}
-            {tab === 'overview' && (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-5 animate-fade-in">
-                    {statCards.map(s => (
-                        <div key={s.label} className="glass-card p-6">
-                            <div className="text-3xl mb-3">{s.icon}</div>
-                            <div className={`text-3xl font-black ${s.color}`}>{s.value}</div>
-                            <div className="text-slate-400 text-sm mt-1">{s.label}</div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Turfs */}
-            {tab === 'turfs' && (
-                <div className="animate-fade-in">
-                    <div className="overflow-x-auto">
-                        <table className="w-full">
-                            <thead>
-                                <tr className="border-b border-white/10 text-left text-slate-400 text-sm">
-                                    {['Turf', 'Owner', 'City', 'Status', 'Actions'].map(h => <th key={h} className="pb-4 pr-6 font-medium">{h}</th>)}
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/5">
-                                {turfs.map(t => (
-                                    <tr key={t.id} className="py-4">
-                                        <td className="py-4 pr-6 font-medium text-white">{t.name}</td>
-                                        <td className="py-4 pr-6 text-slate-400">{t.owner_name}</td>
-                                        <td className="py-4 pr-6 text-slate-400">{t.city}</td>
-                                        <td className="py-4 pr-6">
-                                            <span className={`badge ${t.status === 'approved' ? 'badge-green' : t.status === 'pending' ? 'badge-yellow' : 'badge-red'}`}>{t.status}</span>
-                                        </td>
-                                        <td className="py-4 pr-6">
-                                            <div className="flex gap-2">
-                                                {t.status === 'pending' && <>
-                                                    <button onClick={() => statusTurf(t.id, 'approved')} className="btn-primary text-xs py-1">Approve</button>
-                                                    <button onClick={() => statusTurf(t.id, 'rejected')} className="btn-danger text-xs py-1">Reject</button>
-                                                </>}
-                                                {t.status === 'approved' && <span className="badge badge-green">Active</span>}
-                                                {t.status === 'rejected' && <span className="badge badge-red">Rejected</span>}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                                {!loading && turfs.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-slate-400">No turfs found</td></tr>}
-                            </tbody>
-                        </table>
+            <div className="grid lg:grid-cols-3 gap-8">
+                <div className="glass-card p-8 lg:col-span-2">
+                    <div className="flex items-center justify-between mb-10">
+                        <h3 className="text-sm font-black text-white uppercase tracking-widest">Revenue Velocity</h3>
+                        <div className="px-3 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-black rounded-full">+12.5% vs Last Period</div>
+                    </div>
+                    <div className="h-[350px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={stats.charts.daily}>
+                                <defs>
+                                    <linearGradient id="adminRev" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                                <XAxis dataKey="booking_date" stroke="#475569" fontSize={10} axisLine={false} tickLine={false} />
+                                <YAxis stroke="#475569" fontSize={10} axisLine={false} tickLine={false} />
+                                <Tooltip contentStyle={{ backgroundColor: '#050510', border: '1px solid #ffffff10', borderRadius: '16px' }} />
+                                <Area type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={3} fill="url(#adminRev)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
                     </div>
                 </div>
-            )}
 
-            {/* Users */}
-            {tab === 'users' && (
-                <div className="animate-fade-in overflow-x-auto">
-                    <table className="w-full">
-                        <thead>
-                            <tr className="border-b border-white/10 text-left text-slate-400 text-sm">
-                                {['Name', 'Email', 'Role', 'Status', 'Action'].map(h => <th key={h} className="pb-4 pr-6 font-medium">{h}</th>)}
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5">
-                            {users.map(u => (
-                                <tr key={u.id}>
-                                    <td className="py-4 pr-6 font-medium text-white">{u.name}</td>
-                                    <td className="py-4 pr-6 text-slate-400">{u.email}</td>
-                                    <td className="py-4 pr-6"><span className={`badge ${u.role === 'owner' ? 'badge-yellow' : 'badge-gray'}`}>{u.role}</span></td>
-                                    <td className="py-4 pr-6"><span className={`badge ${u.status === 'active' ? 'badge-green' : 'badge-red'}`}>{u.status}</span></td>
-                                    <td className="py-4 pr-6">
-                                        {u.role !== 'super_admin' && (
-                                            <button onClick={() => toggleUser(u.id, u.status)}
-                                                className={`text-xs py-1 px-3 rounded-lg font-semibold ${u.status === 'active' ? 'btn-danger' : 'btn-primary'}`}>
-                                                {u.status === 'active' ? 'Disable' : 'Enable'}
-                                            </button>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                <div className="glass-card p-8">
+                    <h3 className="text-sm font-black text-white uppercase tracking-widest mb-10">Sport Popularity</h3>
+                    <div className="h-[350px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={stats.charts.by_sport} layout="vertical">
+                                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" horizontal={false} />
+                                <XAxis type="number" hide />
+                                <YAxis dataKey="sport_type" type="category" stroke="#475569" fontSize={10} axisLine={false} tickLine={false} width={80} />
+                                <Tooltip contentStyle={{ backgroundColor: '#050510', border: '1px solid #ffffff10', borderRadius: '16px' }} />
+                                <Bar dataKey="count" fill="#8b5cf6" radius={[0, 4, 4, 0]} barSize={20} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
                 </div>
-            )}
+            </div>
         </div>
     );
 }

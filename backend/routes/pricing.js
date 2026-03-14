@@ -87,4 +87,37 @@ router.delete('/:id', authenticate, requireOwner, async (req, res) => {
     }
 });
 
+// GET /api/pricing/rules/:turf_id — frontend specific endpoint
+router.get('/rules/:turf_id', authenticate, requireOwner, async (req, res) => {
+    try {
+        const [rules] = await db.query(
+            "SELECT * FROM pricing_rules WHERE turf_id = ? AND rule_type = 'custom' ORDER BY id DESC",
+            [req.params.turf_id]
+        );
+        res.json(rules);
+    } catch (err) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// POST /api/pricing/rules — frontend specific endpoint
+router.post('/rules', authenticate, requireOwner, async (req, res) => {
+    const { turf_id, multiplier, label, day_of_week } = req.body;
+    
+    // Convert day name to index (0-6, Sunday=0)
+    const dayMap = { 'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4, 'Friday': 5, 'Saturday': 6 };
+    const dayIndex = day_of_week ? dayMap[day_of_week] : null;
+
+    try {
+        const [result] = await db.query(
+            "INSERT INTO pricing_rules (turf_id, rule_type, multiplier, label, day_of_week) VALUES (?, 'custom', ?, ?, ?)",
+            [turf_id, multiplier, label, dayIndex]
+        );
+        res.status(201).json({ message: 'Rule added', id: result.insertId });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
 module.exports = router;

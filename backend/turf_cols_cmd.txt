@@ -1,0 +1,15 @@
+Field	Type	Null	Key	Default	Extra
+id	int(11)	NO	PRI	NULL	auto_increment
+owner_id	int(11)	NO	MUL	NULL	
+name	varchar(150)	NO		NULL	
+description	text	YES		NULL	
+location	varchar(255)	NO		NULL	
+city	varchar(100)	YES		NULL	
+sport_type	varchar(100)	YES		Football	
+facilities	text	YES		NULL	
+images	text	YES		NULL	
+status	enum('pending','approved','rejected')	YES		pending	
+rejection_reason	text	YES		NULL	
+created_at	timestamp	NO		current_timestamp()	
+updated_at	timestamp	NO		current_timestamp()	on update current_timestamp()
+part_payment_percentage	int(11)	YES		0	

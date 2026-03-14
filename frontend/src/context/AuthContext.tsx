@@ -7,6 +7,7 @@ interface User {
     name: string;
     email: string;
     role: 'super_admin' | 'owner' | 'user';
+    phone?: string;
 }
 
 interface AuthContextType {
@@ -15,6 +16,7 @@ interface AuthContextType {
     login: (email: string, password: string) => Promise<void>;
     register: (data: RegisterData) => Promise<void>;
     logout: () => void;
+    syncUser: () => Promise<void>;
     loading: boolean;
 }
 
@@ -66,8 +68,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
     };
 
+    const syncUser = async () => {
+        try {
+            const { data } = await api.get('/auth/me');
+            setUser(data);
+            localStorage.setItem('user', JSON.stringify(data));
+        } catch (err) {
+            console.error('Failed to sync user', err);
+        }
+    };
+
     return (
-        <AuthContext.Provider value={{ user, token, login, register, logout, loading }}>
+        <AuthContext.Provider value={{ user, token, login, register, logout, syncUser, loading }}>
             {children}
         </AuthContext.Provider>
     );
