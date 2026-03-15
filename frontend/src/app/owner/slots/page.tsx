@@ -10,9 +10,25 @@ interface Slot { slot_id: number; is_blocked: number; start_time: string; end_ti
 export default function SlotManager() {
     const [turfs, setTurfs] = useState<Turf[]>([]);
     const [selectedTurf, setSelectedTurf] = useState('');
-    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [slots, setSlots] = useState<Slot[]>([]);
     const [loading, setLoading] = useState(false);
+
+    const getTodayDateString = () => {
+        const today = new Date();
+        // Adjust for timezone offset to ensure correct date regardless of local time
+        today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+        return today.toISOString().split("T")[0]; // Returns date in "YYYY-MM-DD" format
+    };
+    const todayString = getTodayDateString();
+
+    const [selectedDate, setSelectedDate] = useState(todayString);
+    const [generateStart, setGenerateStart] = useState(todayString);
+    const [generateEnd, setGenerateEnd] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() + 6);
+        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+        return d.toISOString().split("T")[0];
+    });
 
     useEffect(() => {
         const fetchTurfs = async () => { // Async wrapper for fetch call
@@ -69,9 +85,18 @@ export default function SlotManager() {
 
     const generateSlots = async () => {
         if (!selectedTurf) return;
+        
+        if (new Date(generateStart) > new Date(generateEnd)) {
+            toast.error('Start date cannot be after end date');
+            return;
+        }
+
         try {
-            await api.post(`/slots/generate/${selectedTurf}`);
-            toast.success('Slots generated for the next 7 days');
+            await api.post(`/slots/generate/${selectedTurf}`, {
+                start_date: generateStart,
+                end_date: generateEnd
+            });
+            toast.success(`Slots generated from ${generateStart} to ${generateEnd}`);
             fetchSlots();
         } catch (err: unknown) {
             const error = err as { response?: { data?: { message?: string } } };
@@ -79,13 +104,21 @@ export default function SlotManager() {
         }
     };
 
+
+
     return (
         <div className="animate-fade-in grid lg:grid-cols-4 gap-6">
             <div className="lg:col-span-1 space-y-4">
                 <div className="glass-card p-4 space-y-4">
                     <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">Select Facility</label><select className="input-field" value={selectedTurf} onChange={e => setSelectedTurf(e.target.value)}>{turfs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
-                    <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">Select Date</label><input type="date" className="input-field" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} /></div>
-                    <button onClick={generateSlots} className="btn-secondary w-full justify-center">Generate Weekly Slots</button>
+                    <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">View Slots For Date</label><input type="date" className="input-field" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} min={todayString} /></div>
+                    
+                    <div className="pt-4 border-t border-slate-700/50 space-y-4">
+                        <h4 className="text-xs font-bold text-slate-300">Generate Slots</h4>
+                        <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">Start Date</label><input type="date" className="input-field" value={generateStart} onChange={e => setGenerateStart(e.target.value)} min={todayString} /></div>
+                        <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">End Date</label><input type="date" className="input-field" value={generateEnd} onChange={e => setGenerateEnd(e.target.value)} min={generateStart} /></div>
+                        <button onClick={generateSlots} className="btn-primary w-full justify-center mt-2">Generate Custom Slots</button>
+                    </div>
                 </div>
             </div>
 
@@ -99,16 +132,20 @@ export default function SlotManager() {
                     ) : (
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
                             {slots.map(s => {
-                                const isRed = s.status === 'blocked' || s.status === 'booked';
+                                const slotDateTime = new Date(`${selectedDate}T${s.start_time}`);
+                                const isPast = slotDateTime < new Date();
+                                const isRed = s.status === 'blocked' || s.status === 'booked' || isPast;
                                 return (
                                     <button
                                         key={s.slot_id}
                                         onClick={() => toggleSlot(s.slot_id, s.is_blocked, s.status)}
                                         className={`p-3 rounded-xl border text-left transition-all group ${isRed ? 'bg-red-500/10 border-red-500/20 opacity-60 cursor-not-allowed' : 'bg-green-500/5 border-green-500/10 hover:border-green-500/40'}`}
-                                        disabled={s.status === 'booked'}
+                                        disabled={s.status === 'booked' || isPast}
                                     >
                                         <div className="flex justify-between items-start mb-1">
-                                            <span className={`text-[10px] font-bold ${isRed ? 'text-red-400' : 'text-green-400'}`}>{s.status.toUpperCase()}</span>
+                                            <span className={`text-[10px] font-bold ${isRed ? 'text-red-400' : 'text-green-400'}`}>
+                                                {isPast ? 'PASSED' : s.status.toUpperCase()}
+                                            </span>
                                             {isRed ? <LockClosedIcon className="w-3 h-3 text-red-400" /> : <LockOpenIcon className="w-3 h-3 text-green-400" />}
                                         </div>
                                         <p className="text-xs font-black text-white">{s.start_time.slice(0, 5)} - {s.end_time.slice(0, 5)}</p>

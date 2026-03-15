@@ -215,22 +215,44 @@ router.post('/unblock/:id', authenticate, requireOwner, async (req, res) => {
     }
 });
 
-// POST /api/slots/generate/:turf_id — generate slots for next 7 days
+// POST /api/slots/generate/:turf_id — generate slots for next custom date range
 router.post('/generate/:turf_id', authenticate, requireOwner, async (req, res) => {
     const { turf_id } = req.params;
+    const { start_date, end_date } = req.body;
     try {
         const [turf] = await db.query('SELECT id FROM turfs WHERE id = ? AND owner_id = ?', [turf_id, req.user.id]);
         if (turf.length === 0) return res.status(403).json({ message: 'Not your turf' });
 
-        // Simple generation logic: 06:00 to 23:00, 1 hour slots
         const slots = [];
-        const today = new Date();
-        
-        for (let i = 0; i < 7; i++) {
-            const date = new Date(today);
-            date.setDate(today.getDate() + i);
-            const dateStr = date.toISOString().split('T')[0];
-            
+        let startObj = new Date();
+        if (start_date) {
+            startObj = new Date(`${start_date}T00:00:00`);
+        } else {
+            startObj.setHours(0, 0, 0, 0);
+        }
+
+        let endObj = new Date(startObj);
+        if (end_date) {
+            endObj = new Date(`${end_date}T00:00:00`);
+        } else {
+            endObj.setDate(startObj.getDate() + 6); // default 7-day range
+        }
+
+        const diffTime = endObj.getTime() - startObj.getTime();
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0) return res.status(400).json({ message: 'End date must be after start date' });
+        if (diffDays > 366) return res.status(400).json({ message: 'Cannot generate slots for more than 1 year' });
+
+        for (let i = 0; i <= diffDays; i++) {
+            const date = new Date(startObj);
+            date.setDate(startObj.getDate() + i);
+            // Format safely to local YYYY-MM-DD to avoid GMT offsets
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const dateStr = `${year}-${month}-${day}`;
+
             for (let hour = 6; hour < 23; hour++) {
                 const start = `${String(hour).padStart(2, '0')}:00`;
                 const end = `${String(hour + 1).padStart(2, '0')}:00`;
@@ -244,8 +266,8 @@ router.post('/generate/:turf_id', authenticate, requireOwner, async (req, res) =
                 s
             );
         }
-        
-        res.json({ message: 'Slots generated for 7 days' });
+
+        res.json({ message: `Slots generated successfully` });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server error' });
