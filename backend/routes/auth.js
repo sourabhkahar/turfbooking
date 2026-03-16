@@ -14,19 +14,36 @@ router.post('/register', [
     body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
     body('role').isIn(['owner', 'user']).withMessage('Role must be owner or user'),
     body('phone').optional().isMobilePhone(),
+    body('bank_account_number').optional().isString().withMessage('Invalid bank account number'),
+    body('ifsc_code').optional().matches(/^[A-Z]{4}0[A-Z0-9]{6}$/i).withMessage('Invalid IFSC code format'),
+    body('pan').optional().matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/i).withMessage('Invalid PAN format'),
+    body('upi_id').optional().isString(),
 ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { name, email, password, role, phone } = req.body;
+    const { name, email, password, role, phone, bank_account_number, ifsc_code, pan, upi_id } = req.body;
+
+    // Require banking details for owners
+    if (role === 'owner') {
+        if (!bank_account_number) return res.status(400).json({ message: 'Bank account number is required for owners' });
+        if (!ifsc_code) return res.status(400).json({ message: 'IFSC code is required for owners' });
+        if (!pan) return res.status(400).json({ message: 'PAN is required for owners' });
+    }
+
     try {
         const [existing] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
         if (existing.length > 0) return res.status(409).json({ message: 'Email already registered' });
 
         const hash = await bcrypt.hash(password, 10);
         const [result] = await db.query(
-            'INSERT INTO users (name, email, password_hash, role, phone) VALUES (?, ?, ?, ?, ?)',
-            [name, email, hash, role, phone || null]
+            `INSERT INTO users (name, email, password_hash, role, phone, bank_account_number, ifsc_code, pan, upi_id) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [name, email, hash, role, phone || null,
+             bank_account_number || null,
+             ifsc_code ? ifsc_code.toUpperCase() : null,
+             pan ? pan.toUpperCase() : null,
+             upi_id || null]
         );
 
         const token = jwt.sign({ id: result.insertId, email, role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
@@ -36,6 +53,7 @@ router.post('/register', [
         res.status(500).json({ message: 'Server error' });
     }
 });
+
 
 // POST /api/auth/login
 router.post('/login', [

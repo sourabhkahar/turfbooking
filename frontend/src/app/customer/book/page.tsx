@@ -136,8 +136,19 @@ function BookPage() {
         ? (totalPrice * turf.part_payment_percentage) / 100
         : totalPrice;
 
+    // Returns true if this slot's start time is in the past (today only)
+    const isSlotPast = (slot: Slot): boolean => {
+        const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD local
+        if (date !== today) return false; // Future dates — never past
+        const now = new Date();
+        const [h, m] = slot.start_time.split(':').map(Number);
+        const slotStart = new Date();
+        slotStart.setHours(h, m, 0, 0);
+        return slotStart <= now;
+    };
+
     const toggleSlotSelection = (slot: Slot) => {
-        if (slot.status !== 'available') return;
+        if (slot.status !== 'available' || isSlotPast(slot)) return;
         setSelectedSlots(prev =>
             prev.find(s => s.id === slot.id)
                 ? prev.filter(s => s.id !== slot.id)
@@ -194,22 +205,31 @@ function BookPage() {
                             {slots.map(slot => {
                                 const isSelected = selectedSlots.some(s => s.id === slot.id);
                                 const isAvailable = slot.status === 'available';
+                                const isPast = isSlotPast(slot);
                                 return (
                                     <button key={slot.id}
-                                        disabled={!isAvailable || booking}
+                                        disabled={!isAvailable || isPast || booking}
                                         onClick={() => toggleSlotSelection(slot)}
-                                        className={`p-3 rounded-xl text-xs font-semibold text-center transition-all border-2 ${isSelected ? 'slot-selected scale-105 shadow-lg shadow-green-500/20'
-                                            : slot.status === 'booked' ? 'slot-booked'
-                                                : slot.status === 'blocked' ? 'slot-blocked'
-                                                    : 'slot-available hover:scale-105 cursor-pointer'
-                                            }`}>
-                                        <div className="text-sm font-bold">{slot.start_time.slice(0, 5)}</div>
+                                        title={isPast ? 'This slot has already passed' : undefined}
+                                        className={`p-3 rounded-xl text-xs font-semibold text-center transition-all border-2 ${
+                                            isSelected
+                                                ? 'slot-selected scale-105 shadow-lg shadow-green-500/20'
+                                                : isPast
+                                                    ? 'slot-blocked opacity-50 cursor-not-allowed'
+                                                    : slot.status === 'booked'
+                                                        ? 'slot-booked'
+                                                        : slot.status === 'blocked'
+                                                            ? 'slot-blocked'
+                                                            : 'slot-available hover:scale-105 cursor-pointer'
+                                        }`}>
+                                        <div className={`text-sm font-bold ${isPast ? 'line-through opacity-60' : ''}`}>{slot.start_time.slice(0, 5)}</div>
                                         <div className="text-xs opacity-70 my-1">–</div>
-                                        <div className="text-sm font-bold">{slot.end_time.slice(0, 5)}</div>
-                                        {isAvailable && slot.price_per_hour > 0 && (
+                                        <div className={`text-sm font-bold ${isPast ? 'line-through opacity-60' : ''}`}>{slot.end_time.slice(0, 5)}</div>
+                                        {isPast && <div className="mt-1 text-[10px] opacity-60">Past</div>}
+                                        {!isPast && isAvailable && slot.price_per_hour > 0 && (
                                             <div className="mt-1 text-xs opacity-80">₹{slot.price_per_hour}/hr</div>
                                         )}
-                                        {!isAvailable && <div className="mt-1 capitalize opacity-60">{slot.status}</div>}
+                                        {!isPast && !isAvailable && <div className="mt-1 capitalize opacity-60">{slot.status}</div>}
                                     </button>
                                 );
                             })}
@@ -218,9 +238,10 @@ function BookPage() {
 
                     {/* Legend */}
                     <div className="flex gap-5 mt-5 text-xs text-slate-400 flex-wrap">
-                        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded slot-available inline-block"></span> Available (click to select)</span>
+                        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded slot-available inline-block"></span> Available</span>
                         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded slot-booked inline-block"></span> Booked</span>
                         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded slot-blocked inline-block"></span> Blocked</span>
+                        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded slot-blocked opacity-50 inline-block"></span> Past</span>
                     </div>
                 </div>
 
