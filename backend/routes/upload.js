@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireOwner, requireSubscription } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -12,7 +12,8 @@ const storage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        const ext = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm' }[file.mimetype] || '';
+        cb(null, 'file-' + uniqueSuffix + ext);
     }
 });
 
@@ -34,7 +35,12 @@ const upload = multer({
     }
 });
 
-router.post('/', authenticate, upload.single('file'), (req, res) => {
+router.post('/', authenticate, requireOwner, requireSubscription, (req, res, next) => {
+    upload.single('file')(req, res, (err) => {
+        if (err) return res.status(400).json({ message: err.message });
+        next();
+    });
+}, (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: 'No file uploaded' });
     }

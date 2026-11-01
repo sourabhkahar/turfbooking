@@ -28,23 +28,28 @@ const requireAdmin = requireRole('super_admin');
 const requireOwner = requireRole('owner', 'super_admin');
 const requireUser = requireRole('user', 'owner', 'super_admin');
 
+// Owner must have a subscription running now. Attaches req.subscription (plan limits).
 const requireSubscription = async (req, res, next) => {
     if (req.user.role === 'super_admin') return next();
     if (req.user.role !== 'owner') return res.status(403).json({ message: 'Only owners need subscriptions' });
-
     try {
-        const db = require('../config/db');
-        const [subs] = await db.query(
-            "SELECT id FROM owner_subscriptions WHERE owner_id = ? AND status = 'active' AND end_date > NOW() LIMIT 1",
-            [req.user.id]
-        );
-        if (subs.length === 0) {
-            return res.status(403).json({ message: 'Active subscription required. Please subscribe to continue.' });
+        const { getActiveSubscription } = require('../services/subscriptionService');
+        const sub = await getActiveSubscription(req.user.id);
+        if (!sub) {
+            return res.status(402).json({ code: 'SUBSCRIPTION_REQUIRED', message: 'Active subscription required. Please subscribe or renew to continue.' });
         }
+        req.subscription = sub;
         next();
     } catch (err) {
-        res.status(500).json({ message: 'Middleware error' });
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
-module.exports = { authenticate, requireRole, requireAdmin, requireOwner, requireUser, requireSubscription };
+// Plan feature gate, used after requireSubscription. e.g. requireFeature('allow_booking_links')
+const requireFeature = (flag, label = 'This feature') => (req, res, next) => {
+    if (req.user.role === 'super_admin' || req.subscription?.[flag]) return next();
+    return res.status(403).json({ code: 'PLAN_UPGRADE_REQUIRED', message: `${label} is available on the Pro plan. Upgrade to use it.` });
+};
+
+module.exports = { authenticate, requireRole, requireAdmin, requireOwner, requireUser, requireSubscription, requireFeature };

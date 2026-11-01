@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const db = require('../config/db');
 const { authenticate, requireOwner, requireAdmin, requireUser } = require('../middleware/auth');
+const { bookabilityError } = require('../services/bookability');
 
 const router = express.Router();
 
@@ -44,6 +45,11 @@ router.post('/', authenticate, requireUser, [
             }
             const slot = slots[0];
 
+            if (turfInfo && slot.turf_id !== turfInfo.id) {
+                await conn.rollback();
+                return res.status(400).json({ message: 'All slots must be at the same turf' });
+            }
+
             if (slot.status !== 'available') {
                 await conn.rollback();
                 return res.status(409).json({ message: `Slot ${slot.start_time} is ${slot.status}. Cannot book.` });
@@ -53,6 +59,11 @@ router.post('/', authenticate, requireUser, [
             if (!turfInfo) {
                 const [turfs] = await conn.query('SELECT * FROM turfs WHERE id = ?', [slot.turf_id]);
                 turfInfo = turfs[0];
+                const blocked = await bookabilityError(turfInfo, conn);
+                if (blocked) {
+                    await conn.rollback();
+                    return res.status(blocked.status).json({ message: blocked.message });
+                }
                 turfName = turfInfo.name;
                 bookingDate = slot.date;
             }

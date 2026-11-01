@@ -40,3 +40,5 @@
 **/*.swo
 
 **/uploads/*
+# local backups
+_backup_*/

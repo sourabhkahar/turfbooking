@@ -110,13 +110,34 @@ export default function ProfileForm() {
 
         setBankLoading(true);
         try {
+            // 1. Save locally in your DB
             await api.patch('/payouts/owner/bank-details', {
                 bank_account_number: bank.bank_account_number,
                 ifsc_code: bank.ifsc_code.toUpperCase(),
                 pan: bank.pan.toUpperCase(),
                 upi_id: bank.upi_id || undefined
             });
-            toast.success('Bank details updated successfully');
+            
+            // 2. Automate Razorpay Linking
+            try {
+                await api.post('/owner/link-bank-account', {
+                    accountName: name || user?.name || 'Turf Owner',
+                    email: user?.email || '',
+                    accountNumber: bank.bank_account_number,
+                    ifscCode: bank.ifsc_code.toUpperCase()
+                });
+                toast.success('Bank details saved & linked with Razorpay successfully!');
+            } catch (rzpErr: any) {
+                console.error("Razorpay Link Error", rzpErr);
+                // If it fails (e.g. already linked), we just show a generic success for the local save 
+                // or you can show the specific error if needed.
+                if (rzpErr?.response?.data?.message === 'Bank account is already linked.') {
+                    toast.success('Bank details updated successfully!');
+                } else {
+                    toast.error('Saved locally, but failed to link with Razorpay.');
+                }
+            }
+            
         } catch (err: unknown) {
             const error = err as { response?: { data?: { message?: string } } };
             toast.error(error.response?.data?.message || 'Failed to update bank details');

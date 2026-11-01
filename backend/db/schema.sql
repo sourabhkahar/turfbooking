@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   day_of_week TINYINT DEFAULT NULL, -- 0=Sunday, 1=Monday ... 6=Saturday, NULL = all days
   start_time TIME DEFAULT NULL,     -- custom slot time range start
   end_time TIME DEFAULT NULL,       -- custom slot time range end
-  price_per_hour DECIMAL(10,2) NOT NULL,
+  multiplier DECIMAL(5,2) DEFAULT 1.00,
+  price_per_hour DECIMAL(10,2) DEFAULT NULL,
   label VARCHAR(100), -- e.g. "Weekend rate", "Evening rate"
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -106,4 +107,4 @@ CREATE TABLE IF NOT EXISTS booking_tokens (
 
 -- Seed: Default super admin (password: Admin@123)
 INSERT IGNORE INTO users (name, email, password_hash, role, status) VALUES
-('Super Admin', 'admin@turf.com', '$2b$10$jy58R9.7pkBiyp41QfG.a3nliYAAaNIbYHos5jsZ.yvtzmhta', 'super_admin', 'active');
+('Super Admin', 'admin@turf.com', '$2b$10$XnwlAUHL0ohUzW0ByWyineUm1RIpcJXCMUoSST1ndovLRm1HuSZDC', 'super_admin', 'active');

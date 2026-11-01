@@ -1,13 +1,14 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const crypto = require('crypto');
+const { bookabilityError } = require('../services/bookability');
 const db = require('../config/db');
-const { authenticate, requireOwner, requireUser } = require('../middleware/auth');
+const { authenticate, requireOwner, requireUser, requireSubscription, requireFeature } = require('../middleware/auth');
 
 const router = express.Router();
 
 // POST /api/booking-links - Create a temporary booking link
-router.post('/', authenticate, requireOwner, [
+router.post('/', authenticate, requireOwner, requireSubscription, requireFeature('allow_booking_links', 'Booking links'), [
     body('turf_id').isInt(),
     body('slot_id').optional({ nullable: true }).isInt(),
     body('date').isDate(),
@@ -133,6 +134,13 @@ router.post('/:token/book', authenticate, requireUser, async (req, res) => {
             await conn.query("UPDATE booking_tokens SET status = 'expired' WHERE token = ?", [req.params.token]);
             await conn.commit();
             return res.status(400).json({ message: 'Link has expired' });
+        }
+
+        const [[linkTurf]] = await conn.query('SELECT * FROM turfs WHERE id = ?', [linkData.turf_id]);
+        const blocked = await bookabilityError(linkTurf, conn);
+        if (blocked) {
+            await conn.rollback();
+            return res.status(blocked.status).json({ message: blocked.message });
         }
 
         // 2. Resolve Slot

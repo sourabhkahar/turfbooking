@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const db = require('../config/db');
-const { authenticate, requireOwner } = require('../middleware/auth');
+const { authenticate, requireOwner, requireSubscription } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -18,14 +18,14 @@ router.get('/', async (req, res) => {
                  AND (day_of_week IS NULL OR day_of_week = DAYOFWEEK(s.date) - 1)
                  AND (start_time IS NULL OR start_time <= s.start_time)
                  AND (end_time IS NULL OR (end_time > s.start_time AND end_time >= s.end_time))
-                 ORDER BY id DESC LIMIT 1) as multiplier
+                 ORDER BY id DESC LIMIT 1) as custom_multiplier
              FROM slots s WHERE s.turf_id = ? AND s.date = ? ORDER BY s.start_time`,
             [turf_id, date]
         );
 
         const processed = slots.map(s => ({
             ...s,
-            price_per_hour: (s.base_price || 0) * (s.multiplier || 1)
+            price_per_hour: (s.base_price || 0) * (s.custom_multiplier || 1)
         }));
 
         res.json(processed);
@@ -55,7 +55,7 @@ router.get('/owner', authenticate, requireOwner, async (req, res) => {
 });
 
 // POST /api/slots — owner creates single slot
-router.post('/', authenticate, requireOwner, [
+router.post('/', authenticate, requireOwner, requireSubscription, [
     body('turf_id').isInt(),
     body('date').isDate(),
     body('start_time').matches(/^\d{2}:\d{2}$/),
@@ -79,7 +79,7 @@ router.post('/', authenticate, requireOwner, [
 });
 
 // POST /api/slots/bulk — owner generates slots in bulk for a date
-router.post('/bulk', authenticate, requireOwner, [
+router.post('/bulk', authenticate, requireOwner, requireSubscription, [
     body('turf_id').isInt(),
     body('date').isDate(),
     body('start_hour').isInt({ min: 0, max: 23 }),
@@ -125,7 +125,7 @@ router.post('/bulk', authenticate, requireOwner, [
 });
 
 // PATCH /api/slots/:id/block — owner blocks a slot
-router.patch('/:id/block', authenticate, requireOwner, async (req, res) => {
+router.patch('/:id/block', authenticate, requireOwner, requireSubscription, async (req, res) => {
     const { reason } = req.body;
     try {
         const [slot] = await db.query(
@@ -145,7 +145,7 @@ router.patch('/:id/block', authenticate, requireOwner, async (req, res) => {
 });
 
 // PATCH /api/slots/:id/unblock — owner unblocks
-router.patch('/:id/unblock', authenticate, requireOwner, async (req, res) => {
+router.patch('/:id/unblock', authenticate, requireOwner, requireSubscription, async (req, res) => {
     try {
         const [slot] = await db.query(
             'SELECT s.*, t.owner_id FROM slots s JOIN turfs t ON s.turf_id = t.id WHERE s.id = ?',
@@ -182,7 +182,7 @@ router.get('/:turf_id', authenticate, requireOwner, async (req, res) => {
 });
 
 // POST /api/slots/block — block a slot
-router.post('/block', authenticate, requireOwner, async (req, res) => {
+router.post('/block', authenticate, requireOwner, requireSubscription, async (req, res) => {
     const { slot_id } = req.body;
     try {
         const [slot] = await db.query(
@@ -199,7 +199,7 @@ router.post('/block', authenticate, requireOwner, async (req, res) => {
 });
 
 // POST /api/slots/unblock/:id — unblock a slot
-router.post('/unblock/:id', authenticate, requireOwner, async (req, res) => {
+router.post('/unblock/:id', authenticate, requireOwner, requireSubscription, async (req, res) => {
     try {
         const [slot] = await db.query(
             "SELECT s.id, s.status FROM slots s JOIN turfs t ON s.turf_id = t.id WHERE s.id = ? AND t.owner_id = ?",
@@ -216,7 +216,7 @@ router.post('/unblock/:id', authenticate, requireOwner, async (req, res) => {
 });
 
 // POST /api/slots/generate/:turf_id — generate slots for next custom date range
-router.post('/generate/:turf_id', authenticate, requireOwner, async (req, res) => {
+router.post('/generate/:turf_id', authenticate, requireOwner, requireSubscription, async (req, res) => {
     const { turf_id } = req.params;
     const { start_date, end_date } = req.body;
     try {

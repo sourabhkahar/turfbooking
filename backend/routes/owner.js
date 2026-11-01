@@ -1,8 +1,63 @@
 const express = require('express');
 const db = require('../config/db');
 const { authenticate, requireOwner } = require('../middleware/auth');
+const { createLinkedAccount, fetchLinkedAccount, settlementMode } = require('../services/settlement');
 
 const router = express.Router();
+
+// POST /api/owner/link-bank-account - Creates the owner's Razorpay Route linked account
+router.post('/link-bank-account', authenticate, requireOwner, async (req, res) => {
+    const accountNumber = String(req.body.accountNumber || '').replace(/\s/g, '');
+    const ifsc = String(req.body.ifscCode || '').toUpperCase().trim();
+    const beneficiaryName = String(req.body.accountName || '').trim();
+    if (!/^\d{9,18}$/.test(accountNumber)) return res.status(400).json({ message: 'Bank account number must be 9–18 digits' });
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) return res.status(400).json({ message: 'Invalid IFSC code format' });
+    if (beneficiaryName.length < 4) return res.status(400).json({ message: 'Account holder name must be at least 4 characters' });
+
+    try {
+        const [[owner]] = await db.query('SELECT id, email, phone, razorpay_linked_account_id FROM users WHERE id = ?', [req.user.id]);
+        if (owner.razorpay_linked_account_id) {
+            return res.status(400).json({ message: 'Bank account is already linked.' });
+        }
+
+        const account = await createLinkedAccount(owner, { accountNumber, ifsc, beneficiaryName });
+        const settlement = account.product_config?.active_configuration?.settlement_accounts?.[0];
+        await db.query(
+            'UPDATE users SET razorpay_linked_account_id = ?, route_status = ? WHERE id = ?',
+            [account.id, settlement?.verification_status || account.status || 'created', req.user.id]
+        );
+        res.json({ success: true, message: 'Bank account linked. Razorpay verifies it within about 15 minutes.', account_id: account.id });
+    } catch (err) {
+        const detail = err.response?.data?.error?.description;
+        console.error('Razorpay Linked Account Error:', err.response?.data || err.message);
+        res.status(502).json({ message: detail || 'Error linking bank account. Please check the details and try again.' });
+    }
+});
+
+// GET /api/owner/route-status - Is this owner ready to receive online payments?
+router.get('/route-status', authenticate, requireOwner, async (req, res) => {
+    try {
+        const [[owner]] = await db.query('SELECT razorpay_linked_account_id, route_status FROM users WHERE id = ?', [req.user.id]);
+        let status = owner.route_status || null;
+        if (owner.razorpay_linked_account_id) {
+            try {
+                const acc = await fetchLinkedAccount(owner.razorpay_linked_account_id);
+                status = acc.product_config?.active_configuration?.settlement_accounts?.[0]?.verification_status
+                    || acc.product_config?.activation_status || acc.status || status;
+                await db.query('UPDATE users SET route_status = ? WHERE id = ?', [status, req.user.id]);
+            } catch (e) { /* keep last known status */ }
+        }
+        res.json({
+            settlement_mode: settlementMode(),
+            linked: !!owner.razorpay_linked_account_id,
+            status,
+            can_receive_payments: settlementMode() !== 'route' || !!owner.razorpay_linked_account_id,
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
 
 // GET /api/owner/stats - Comprehensive stats for owner dashboard
 router.get('/stats', authenticate, requireOwner, async (req, res) => {
@@ -95,10 +150,15 @@ router.get('/billing', authenticate, requireOwner, async (req, res) => {
 
         // 1. Current Subscription
         const [subs] = await db.query(
-            "SELECT plan_name, status, end_date as next_billing_at FROM owner_subscriptions WHERE owner_id = ? ORDER BY end_date DESC LIMIT 1",
+            "SELECT plan_name, status, end_date as next_billing_at FROM owner_subscriptions WHERE owner_id = ? AND status <> 'pending' ORDER BY end_date DESC LIMIT 1",
             [ownerId]
         );
-        const subscription = subs[0] || { plan_name: 'No Active Plan', status: 'inactive', next_billing_at: new Date() };
+        let subscription = subs[0] || { plan_name: 'No Active Plan', status: 'inactive', next_billing_at: new Date() };
+
+        if (subs[0] && new Date(subs[0].next_billing_at) < new Date()) {
+            subscription.status = 'expired';
+            subscription.plan_name = 'Expired Plan';
+        }
 
         // 2. Financial Stats
         const [[{ pending_payout }]] = await db.query(`
@@ -212,17 +272,18 @@ router.post('/bookings/:id/settle', authenticate, requireOwner, async (req, res)
 
         // Verify ownership
         const [booking] = await db.query(`
-            SELECT b.id, b.total_amount 
+            SELECT b.id, b.total_amount, b.status 
             FROM bookings b 
             JOIN turfs t ON b.turf_id = t.id 
             WHERE b.id = ? AND t.owner_id = ?
         `, [bookingId, ownerId]);
 
         if (booking.length === 0) return res.status(404).json({ message: 'Booking not found or not yours' });
+        if (booking[0].status !== 'confirmed') return res.status(409).json({ message: 'Only confirmed bookings can be settled' });
 
         await db.query(`
             UPDATE bookings 
-            SET paid_amount = total_amount, payment_status = 'fully_paid', status = 'confirmed' 
+            SET paid_amount = total_amount, remaining_amount = 0, payment_status = 'fully_paid', cash_payment_received = TRUE 
             WHERE id = ?
         `, [bookingId]);
 

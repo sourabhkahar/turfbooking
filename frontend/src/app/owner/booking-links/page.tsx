@@ -140,7 +140,7 @@ export default function BookingLinks() {
                             </thead>
                             <tbody>
                                 {links.map(l => (
-                                    <tr key={l.id} className="hover:bg-white/5 transition-colors">
+                                    <tr key={l.token || Math.random().toString()} className="hover:bg-white/5 transition-colors">
                                         <td>
                                             <div className="font-black text-white">{new Date(l.date).toLocaleDateString()}</div>
                                             <div className="text-[10px] text-blue-400 font-bold uppercase">{l.start_time.slice(0, 5)} - {l.end_time.slice(0, 5)}</div>

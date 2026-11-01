@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const db = require('../config/db');
 const { authenticate, requireOwner, requireAdmin, requireSubscription } = require('../middleware/auth');
+const { ACTIVE_OWNER_SQL } = require('../services/subscriptionService');
 
 const router = express.Router();
 
@@ -13,7 +14,7 @@ router.get('/', async (req, res) => {
         const l = parseInt(limit);
         const offset = (p - 1) * l;
 
-        let baseQuery = `FROM turfs t JOIN users u ON t.owner_id = u.id WHERE t.status = 'approved'`;
+        let baseQuery = `FROM turfs t JOIN users u ON t.owner_id = u.id WHERE t.status = 'approved' AND u.status = 'active' AND ${ACTIVE_OWNER_SQL}`;
         const params = [];
 
         if (city) { baseQuery += ' AND t.city LIKE ?'; params.push(`%${city}%`); }
@@ -66,7 +67,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // GET /api/turfs/owner/my — owner's turfs with pagination
-router.get('/owner/my', authenticate, requireOwner, requireSubscription, async (req, res) => {
+router.get('/owner/my', authenticate, requireOwner, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 6;
@@ -105,11 +106,20 @@ router.post('/', authenticate, requireOwner, requireSubscription, [
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const { name, description, location, city, sport_type, facilities, images, part_payment_percentage } = req.body;
+    const pct = Number(part_payment_percentage) || 0;
+    if (pct < 0 || pct > 100) return res.status(400).json({ message: 'Part payment percentage must be 0–100' });
     try {
+        if (req.user.role !== 'super_admin') {
+            const [[{ n }]] = await db.query("SELECT COUNT(*) AS n FROM turfs WHERE owner_id = ? AND status <> 'deleted'", [req.user.id]);
+            const max = req.subscription?.max_turfs;
+            if (max != null && n >= max) {
+                return res.status(403).json({ code: 'PLAN_UPGRADE_REQUIRED', message: `Your plan allows ${max} turf${max === 1 ? '' : 's'}. Upgrade to add more.` });
+            }
+        }
         const [result] = await db.query(
             'INSERT INTO turfs (owner_id, name, description, location, city, sport_type, facilities, images, part_payment_percentage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [req.user.id, name, description || null, location, city, sport_type || 'Football',
-            JSON.stringify(facilities || []), JSON.stringify(images || []), part_payment_percentage || 0]
+            JSON.stringify(facilities || []), JSON.stringify(images || []), pct]
         );
 
         res.status(201).json({ message: 'Turf submitted for approval', turf_id: result.insertId });
@@ -120,7 +130,7 @@ router.post('/', authenticate, requireOwner, requireSubscription, [
 });
 
 // PUT /api/turfs/:id — owner updates turf
-router.put('/:id', authenticate, requireOwner, async (req, res) => {
+router.put('/:id', authenticate, requireOwner, requireSubscription, async (req, res) => {
     try {
         const [turf] = await db.query('SELECT * FROM turfs WHERE id = ?', [req.params.id]);
         if (turf.length === 0) return res.status(404).json({ message: 'Turf not found' });
@@ -168,7 +178,7 @@ router.patch('/:id/status', authenticate, requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/turfs/:id/base-price — owner updates base price
-router.put('/:id/base-price', authenticate, requireOwner, async (req, res) => {
+router.put('/:id/base-price', authenticate, requireOwner, requireSubscription, async (req, res) => {
     const { base_price } = req.body;
     try {
         const [turf] = await db.query('SELECT id FROM turfs WHERE id = ? AND owner_id = ?', [req.params.id, req.user.id]);

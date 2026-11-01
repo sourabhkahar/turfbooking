@@ -1,0 +1,3 @@
+ALTER TABLE pricing_rules 
+ADD COLUMN multiplier DECIMAL(5,2) DEFAULT 1.00 AFTER end_time,
+MODIFY COLUMN price_per_hour DECIMAL(10,2) DEFAULT NULL;

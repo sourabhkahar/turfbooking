@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const db = require('../config/db');
-const { authenticate, requireOwner } = require('../middleware/auth');
+const { authenticate, requireOwner, requireSubscription } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -19,7 +19,7 @@ router.get('/:turf_id', async (req, res) => {
 });
 
 // POST /api/pricing — owner sets a pricing rule (base or custom)
-router.post('/', authenticate, requireOwner, [
+router.post('/', authenticate, requireOwner, requireSubscription, [
     body('turf_id').isInt(),
     body('rule_type').isIn(['base', 'custom']).withMessage('rule_type must be base or custom'),
     body('price_per_hour').isFloat({ min: 0 }).withMessage('Price must be a positive number'),
@@ -50,7 +50,7 @@ router.post('/', authenticate, requireOwner, [
 });
 
 // PUT /api/pricing/:id — update a pricing rule
-router.put('/:id', authenticate, requireOwner, async (req, res) => {
+router.put('/:id', authenticate, requireOwner, requireSubscription, async (req, res) => {
     try {
         const [rule] = await db.query(
             'SELECT pr.*, t.owner_id FROM pricing_rules pr JOIN turfs t ON pr.turf_id = t.id WHERE pr.id = ?',
@@ -71,7 +71,7 @@ router.put('/:id', authenticate, requireOwner, async (req, res) => {
 });
 
 // DELETE /api/pricing/:id — delete a pricing rule
-router.delete('/:id', authenticate, requireOwner, async (req, res) => {
+router.delete('/:id', authenticate, requireOwner, requireSubscription, async (req, res) => {
     try {
         const [rule] = await db.query(
             'SELECT pr.*, t.owner_id FROM pricing_rules pr JOIN turfs t ON pr.turf_id = t.id WHERE pr.id = ?',
@@ -90,6 +90,9 @@ router.delete('/:id', authenticate, requireOwner, async (req, res) => {
 // GET /api/pricing/rules/:turf_id — frontend specific endpoint
 router.get('/rules/:turf_id', authenticate, requireOwner, async (req, res) => {
     try {
+        const [turf] = await db.query('SELECT id FROM turfs WHERE id = ? AND owner_id = ?', [req.params.turf_id, req.user.id]);
+        if (turf.length === 0 && req.user.role !== 'super_admin') return res.status(403).json({ message: 'Not your turf' });
+
         const [rules] = await db.query(
             "SELECT * FROM pricing_rules WHERE turf_id = ? AND rule_type = 'custom' ORDER BY id DESC",
             [req.params.turf_id]
@@ -101,17 +104,23 @@ router.get('/rules/:turf_id', authenticate, requireOwner, async (req, res) => {
 });
 
 // POST /api/pricing/rules — frontend specific endpoint
-router.post('/rules', authenticate, requireOwner, async (req, res) => {
+router.post('/rules', authenticate, requireOwner, requireSubscription, async (req, res) => {
     const { turf_id, multiplier, label, day_of_week } = req.body;
     
     // Convert day name to index (0-6, Sunday=0)
     const dayMap = { 'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4, 'Friday': 5, 'Saturday': 6 };
     const dayIndex = day_of_week ? dayMap[day_of_week] : null;
+    const mult = parseFloat(multiplier);
+    if (day_of_week && dayIndex === undefined) return res.status(400).json({ message: 'Invalid day_of_week' });
+    if (Number.isNaN(mult) || mult <= 0 || mult > 10) return res.status(400).json({ message: 'Multiplier must be between 0 and 10' });
 
     try {
+        const [turf] = await db.query('SELECT id FROM turfs WHERE id = ? AND owner_id = ?', [turf_id, req.user.id]);
+        if (turf.length === 0 && req.user.role !== 'super_admin') return res.status(403).json({ message: 'Not your turf' });
+
         const [result] = await db.query(
             "INSERT INTO pricing_rules (turf_id, rule_type, multiplier, label, day_of_week) VALUES (?, 'custom', ?, ?, ?)",
-            [turf_id, multiplier, label, dayIndex]
+            [turf_id, mult, label || null, dayIndex]
         );
         res.status(201).json({ message: 'Rule added', id: result.insertId });
     } catch (err) {

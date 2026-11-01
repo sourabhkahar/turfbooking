@@ -12,7 +12,8 @@ import {
     ArrowLeftOnRectangleIcon,
     Bars3Icon,
     XMarkIcon,
-    UserCircleIcon
+    UserCircleIcon,
+    RectangleStackIcon
 } from '@heroicons/react/24/outline';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -41,6 +42,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { id: 'users', name: 'User Directory', icon: UsersIcon, href: '/admin/users' },
         { id: 'payouts', name: 'Owner Payouts', icon: CurrencyRupeeIcon, href: '/admin/payouts' },
         { id: 'financials', name: 'Financial Hub', icon: PresentationChartLineIcon, href: '/admin/financials' },
+        { id: 'plans', name: 'Subscription Plans', icon: RectangleStackIcon, href: '/admin/plans' },
     ];
 
     const currentTab = menuItems.find(item => item.href === pathname)?.id || 'overview';

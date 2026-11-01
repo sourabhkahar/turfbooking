@@ -1,35 +1,75 @@
 const express = require('express');
-const Razorpay = require('razorpay');
-const crypto = require('crypto');
 const db = require('../config/db');
 const { authenticate, requireOwner } = require('../middleware/auth');
 const { sendBookingConfirmation } = require('../services/notificationService');
+const { razorpay, verifyPaymentSignature } = require('../services/razorpay');
+const { amountDuePaise, confirmOrder } = require('../services/bookingPayments');
+const { getPlatformFeePercent } = require('../services/settings');
+const { settlementMode } = require('../services/settlement');
 
 const router = express.Router();
 
-// Initialize Razorpay
-const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholder',
-    key_secret: process.env.RAZORPAY_KEY_SECRET || 'placeholder_secret',
-});
+const parseIds = (body) => {
+    const raw = Array.isArray(body.bookingIds) ? body.bookingIds : [body.bookingId];
+    const ids = [...new Set(raw.map((x) => parseInt(x, 10)).filter((x) => Number.isInteger(x) && x > 0))];
+    return ids.length > 0 && ids.length <= 24 ? ids : null;
+};
 
 // POST /api/payment/create-order
+// The amount is computed on the server from the bookings; any client "amount" is ignored.
 router.post('/create-order', authenticate, async (req, res) => {
     try {
-        const { amount, bookingId, bookingIds } = req.body; // amount in INR
-        const ids = bookingIds || [bookingId];
+        const ids = parseIds(req.body);
+        if (!ids) return res.status(400).json({ message: 'Invalid booking IDs' });
+
+        const [bookings] = await db.query(
+            `SELECT b.*, t.part_payment_percentage, t.owner_id
+             FROM bookings b JOIN turfs t ON b.turf_id = t.id
+             WHERE b.id IN (?) AND b.user_id = ?`,
+            [ids, req.user.id]
+        );
+        if (bookings.length !== ids.length) return res.status(404).json({ message: 'Booking not found' });
+        if (bookings.some((b) => b.status !== 'pending')) {
+            return res.status(409).json({ message: 'One or more bookings are no longer awaiting payment' });
+        }
+        if (new Set(bookings.map((b) => b.turf_id)).size !== 1) {
+            return res.status(400).json({ message: 'All bookings in one payment must be for the same turf' });
+        }
+
+        const amountPaise = amountDuePaise(bookings);
+        if (amountPaise < 100) return res.status(400).json({ message: 'Amount must be at least ₹1' });
 
         const options = {
-            amount: Math.round(amount * 100), // convert to paise
+            amount: amountPaise,
             currency: 'INR',
-            receipt: `rcpt_${ids[0]}_${Date.now()}`,
+            receipt: `bk_${ids[0]}_${Date.now()}`,
+            notes: { booking_ids: ids.join(','), user_id: String(req.user.id) },
         };
 
+        // Route settlement: split the owner's share out of this payment instantly.
+        let settlement = 'payout';
+        if (settlementMode() === 'route') {
+            const [[owner]] = await db.query('SELECT razorpay_linked_account_id FROM users WHERE id = ?', [bookings[0].owner_id]);
+            if (!owner?.razorpay_linked_account_id) {
+                return res.status(409).json({ message: 'This turf is not accepting online payments yet. Please contact the venue.' });
+            }
+            const feePercent = await getPlatformFeePercent();
+            const ownerShare = amountPaise - Math.round((amountPaise * feePercent) / 100);
+            if (ownerShare > 0) {
+                options.transfers = [{
+                    account: owner.razorpay_linked_account_id,
+                    amount: ownerShare,
+                    currency: 'INR',
+                    notes: { booking_ids: ids.join(','), purpose: 'turf_booking' },
+                    linked_account_notes: ['booking_ids'],
+                    on_hold: 0,
+                }];
+            }
+            settlement = 'route';
+        }
+
         const order = await razorpay.orders.create(options);
-
-        // Update all related bookings with order ID
-        await db.query('UPDATE bookings SET razorpay_order_id = ? WHERE id IN (?)', [order.id, ids]);
-
+        await db.query('UPDATE bookings SET razorpay_order_id = ?, settlement_method = ? WHERE id IN (?) AND user_id = ?', [order.id, settlement, ids, req.user.id]);
         res.json(order);
     } catch (err) {
         console.error('Razorpay Order Creation Error:', err);
@@ -38,84 +78,61 @@ router.post('/create-order', authenticate, async (req, res) => {
 });
 
 // POST /api/payment/verify
+// Trusts only Razorpay: signature, then the payment fetched from Razorpay (order + amount + status).
 router.post('/verify', authenticate, async (req, res) => {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ message: 'Missing payment details' });
+    }
+    if (!verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
+        return res.status(400).json({ message: 'Invalid payment signature' });
+    }
+
     try {
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, bookingId, bookingIds } = req.body;
-        const ids = bookingIds || [bookingId];
-
-        const sign = razorpay_order_id + "|" + razorpay_payment_id;
-        const expectedSign = crypto
-            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET || 'placeholder_secret')
-            .update(sign.toString())
-            .digest("hex");
-
-        if (razorpay_signature === expectedSign) {
-            // Fetch booking details to determine amounts
-            const [bookings] = await db.query('SELECT b.*, t.part_payment_percentage FROM bookings b JOIN turfs t ON b.turf_id = t.id WHERE b.id IN (?)', [ids]);
-            
-            if (bookings.length === 0) {
-                 return res.status(404).json({ message: "Bookings not found" });
-            }
-
-            // For each booking, update its status
-            for (const b of bookings) {
-                let paidAmount = b.total_amount;
-                let remainingAmount = 0;
-                let payStatus = 'fully_paid';
-
-                if (b.payment_type === 'part' && b.part_payment_percentage > 0) {
-                    paidAmount = (b.total_amount * b.part_payment_percentage) / 100;
-                    remainingAmount = b.total_amount - paidAmount;
-                    payStatus = 'partially_paid';
-                }
-
-                await db.query(`
-                    UPDATE bookings 
-                    SET payment_status = ?, 
-                        paid_amount = ?, 
-                        remaining_amount = ?,
-                        payment_id = ?,
-                        status = 'confirmed'
-                    WHERE id = ?
-                `, [payStatus, paidAmount, remainingAmount, razorpay_payment_id, b.id]);
-            }
-
-            // Send email for each booking (or consider a consolidated one later)
-            for (const id of ids) {
-                await sendBookingConfirmation(id);
-            }
-
-            return res.json({ message: "Payment verified successfully" });
-        } else {
-            return res.status(400).json({ message: "Invalid signature sent!" });
+        const payment = await razorpay.payments.fetch(razorpay_payment_id);
+        if (payment.order_id !== razorpay_order_id || !['captured', 'authorized'].includes(payment.status)) {
+            return res.status(400).json({ message: 'Payment not completed for this order' });
         }
+
+        const { newlyConfirmed } = await confirmOrder({
+            orderId: razorpay_order_id,
+            paymentId: razorpay_payment_id,
+            amountPaise: payment.amount,
+            userId: req.user.id,
+        });
+
+        for (const id of newlyConfirmed) {
+            sendBookingConfirmation(id).catch((e) => console.error('Email error:', e.message));
+        }
+        res.json({ message: 'Payment verified successfully' });
     } catch (err) {
+        if (err.status) return res.status(err.status).json({ message: err.message });
         console.error('Razorpay Verification Error:', err);
         res.status(500).json({ message: 'Internal server error during verification' });
     }
 });
 
-// PATCH /api/payment/mark-as-paid/:bookingId (Owner marks cash payment)
+// PATCH /api/payment/mark-as-paid/:bookingId (owner records the cash balance)
 router.patch('/mark-as-paid/:bookingId', authenticate, requireOwner, async (req, res) => {
     try {
-        const { bookingId } = req.params;
-        const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-
+        const [rows] = await db.query(
+            `SELECT b.id, b.status, t.owner_id FROM bookings b JOIN turfs t ON b.turf_id = t.id WHERE b.id = ?`,
+            [req.params.bookingId]
+        );
         if (rows.length === 0) return res.status(404).json({ message: 'Booking not found' });
+        if (rows[0].owner_id !== req.user.id && req.user.role !== 'super_admin') {
+            return res.status(403).json({ message: 'Not your booking' });
+        }
+        if (rows[0].status !== 'confirmed') {
+            return res.status(409).json({ message: 'Only confirmed bookings can be marked as paid' });
+        }
 
-        const booking = rows[0];
-
-        // Update to fully paid via cash
-        await db.query(`
-            UPDATE bookings 
-            SET payment_status = 'fully_paid', 
-                paid_amount = total_amount, 
-                remaining_amount = 0,
-                payment_method = 'mixed',
-                cash_payment_received = TRUE
-            WHERE id = ?
-        `, [bookingId]);
-
+        await db.query(
+            `UPDATE bookings SET payment_status = 'fully_paid', paid_amount = total_amount, remaining_amount = 0,
+                    payment_method = 'mixed', cash_payment_received = TRUE
+             WHERE id = ?`,
+            [req.params.bookingId]
+        );
         res.json({ message: 'Booking marked as fully paid via cash' });
     } catch (err) {
         console.error(err);

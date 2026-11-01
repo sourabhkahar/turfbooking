@@ -158,6 +158,8 @@ router.get('/settings', authenticate, requireAdmin, async (req, res) => {
 // PATCH /api/admin/settings — update a setting
 router.patch('/settings', authenticate, requireAdmin, async (req, res) => {
     const { key, value } = req.body;
+    const ALLOWED = { payout_mode: (v) => ['manual', 'auto'].includes(v), platform_fee_percent: (v) => !Number.isNaN(parseFloat(v)) && parseFloat(v) >= 0 && parseFloat(v) < 50 };
+    if (!ALLOWED[key] || !ALLOWED[key](String(value))) return res.status(400).json({ message: 'Invalid setting' });
     try {
         await db.query('INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?', [key, value, value]);
         res.json({ message: 'Setting updated' });
@@ -166,59 +168,104 @@ router.patch('/settings', authenticate, requireAdmin, async (req, res) => {
     }
 });
 
-// POST /api/admin/auto-payout — trigger auto payout for all eligible owners
+// POST /api/admin/auto-payout — pay all eligible owners through the same RazorpayX path
 router.post('/auto-payout', authenticate, requireAdmin, async (req, res) => {
-    const conn = await db.getConnection();
     try {
-        await conn.beginTransaction();
-
-        // 1. Get all owners with pending earnings
-        const [pendingOwners] = await conn.query(`
-            SELECT u.id as owner_id, SUM(b.total_amount) as total_pending
-            FROM users u
-            JOIN turfs t ON u.id = t.owner_id
-            JOIN bookings b ON t.id = b.turf_id
-            WHERE b.status = 'confirmed' AND b.payment_status = 'fully_paid' AND b.payout_id IS NULL
-            GROUP BY u.id
-            HAVING total_pending > 0
-        `);
-
-        if (pendingOwners.length === 0) {
-            await conn.rollback();
-            return res.json({ message: 'No pending payouts to process' });
-        }
-
-        const ref = `AUTO-PAY-${Date.now()}`;
-        const processedIds = [];
-
-        for (const owner of pendingOwners) {
-            // Create Payout
-            const [result] = await conn.query(`
-                INSERT INTO payouts (owner_id, amount, final_amount, status, period_start, period_end, processed_at, transaction_ref, payout_type)
-                VALUES (?, ?, ?, 'processed', NOW(), NOW(), NOW(), ?, 'auto')
-            `, [owner.owner_id, owner.total_pending, owner.total_pending, ref]);
-
-            const payoutId = result.insertId;
-
-            // Link bookings
-            await conn.query(`
-                UPDATE bookings 
-                SET payout_id = ?
-                WHERE payout_id IS NULL AND status = 'confirmed' AND payment_status = 'fully_paid'
-                AND turf_id IN (SELECT id FROM turfs WHERE owner_id = ?)
-            `, [payoutId, owner.owner_id]);
-            
-            processedIds.push(owner.owner_id);
-        }
-
-        await conn.commit();
-        res.json({ message: `Automated payout completed for ${processedIds.length} owners`, ref });
+        const { processAllPayouts } = require('../services/payoutService');
+        const results = await processAllPayouts('auto');
+        if (results.length === 0) return res.json({ message: 'No pending payouts to process', results });
+        const ok = results.filter((r) => r.status !== 'failed').length;
+        res.json({ message: `Automated payout initiated for ${ok} of ${results.length} owners`, results });
     } catch (err) {
-        await conn.rollback();
         console.error(err);
         res.status(500).json({ message: 'Error processing automated payouts' });
-    } finally {
-        conn.release();
+    }
+});
+
+// ─── Subscription plans ───────────────────────────────────────────────────────
+const PLAN_FIELDS = ['name', 'tier', 'billing_interval', 'price', 'max_turfs', 'allow_booking_links', 'is_active', 'sort_order'];
+
+function validatePlan(b, partial) {
+    const errs = [];
+    const has = (k) => b[k] !== undefined;
+    if ((!partial || has('name')) && !String(b.name || '').trim()) errs.push('name is required');
+    if ((!partial || has('tier')) && !['starter', 'pro'].includes(b.tier)) errs.push('tier must be starter or pro');
+    if ((!partial || has('billing_interval')) && !['month', 'year'].includes(b.billing_interval)) errs.push('billing_interval must be month or year');
+    if ((!partial || has('price')) && !(Number(b.price) >= 1)) errs.push('price must be at least 1');
+    if (has('max_turfs') && b.max_turfs !== null && !(Number.isInteger(Number(b.max_turfs)) && Number(b.max_turfs) >= 1)) errs.push('max_turfs must be a whole number ≥ 1, or null for unlimited');
+    return errs;
+}
+
+// GET /api/admin/plans — all plans + trial settings
+router.get('/plans', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const [plans] = await db.query('SELECT * FROM plans ORDER BY sort_order, price');
+        const [settings] = await db.query("SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('trial_days', 'trial_plan_code')");
+        res.json({ plans, trial: Object.fromEntries(settings.map((r) => [r.setting_key, r.setting_value])) });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// POST /api/admin/plans — create a plan
+router.post('/plans', authenticate, requireAdmin, async (req, res) => {
+    const errs = validatePlan(req.body, false);
+    const code = String(req.body.code || '').trim().toLowerCase();
+    if (!/^[a-z0-9_]{3,50}$/.test(code)) errs.push('code must be 3–50 lowercase letters, digits or _');
+    if (errs.length) return res.status(400).json({ message: errs.join('; ') });
+    try {
+        const b = req.body;
+        const [r] = await db.query(
+            `INSERT INTO plans (code, name, tier, billing_interval, price, max_turfs, allow_booking_links, is_active, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [code, b.name.trim(), b.tier, b.billing_interval, b.price, b.max_turfs ?? null, b.allow_booking_links ? 1 : 0, b.is_active === false ? 0 : 1, b.sort_order || 0]
+        );
+        res.status(201).json({ message: 'Plan created', id: r.insertId });
+    } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'A plan with this code already exists' });
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// PATCH /api/admin/plans/:id — edit a plan (price changes apply to new purchases only)
+router.patch('/plans/:id', authenticate, requireAdmin, async (req, res) => {
+    const errs = validatePlan(req.body, true);
+    if (errs.length) return res.status(400).json({ message: errs.join('; ') });
+    const sets = [], vals = [];
+    for (const k of PLAN_FIELDS) {
+        if (req.body[k] === undefined) continue;
+        sets.push(`${k} = ?`);
+        vals.push(k === 'allow_booking_links' || k === 'is_active' ? (req.body[k] ? 1 : 0) : req.body[k]);
+    }
+    if (!sets.length) return res.status(400).json({ message: 'Nothing to update' });
+    try {
+        const [r] = await db.query(`UPDATE plans SET ${sets.join(', ')} WHERE id = ?`, [...vals, req.params.id]);
+        if (!r.affectedRows) return res.status(404).json({ message: 'Plan not found' });
+        res.json({ message: 'Plan updated' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// PATCH /api/admin/trial — { trial_days, trial_plan_code }
+router.patch('/trial', authenticate, requireAdmin, async (req, res) => {
+    const days = parseInt(req.body.trial_days, 10);
+    if (!(days >= 0 && days <= 90)) return res.status(400).json({ message: 'trial_days must be 0–90 (0 turns trials off)' });
+    try {
+        const code = req.body.trial_plan_code;
+        if (code) {
+            const [[p]] = await db.query('SELECT id FROM plans WHERE code = ?', [code]);
+            if (!p) return res.status(400).json({ message: 'Unknown plan code' });
+            await db.query("INSERT INTO app_settings (setting_key, setting_value) VALUES ('trial_plan_code', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)", [code]);
+        }
+        await db.query("INSERT INTO app_settings (setting_key, setting_value) VALUES ('trial_days', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)", [String(days)]);
+        res.json({ message: 'Trial settings updated' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
     }
 });
 
