@@ -14,7 +14,7 @@ async function runMigration() {
     });
 
     try {
-        const sql = fs.readFileSync(path.join(__dirname, 'add_banking_fields.sql'), 'utf8');
+        const sql = fs.readFileSync(path.join(__dirname, '../db/migrations/001_add_banking_fields.sql'), 'utf8');
         const statements = sql
             .split(';')
             .map(s => s.trim())

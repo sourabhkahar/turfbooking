@@ -1,17 +1,21 @@
 {
-  "name": "backend",
+  "name": "turf-booking-backend",
   "version": "1.0.0",
+  "description": "Turf Booking API — Express + MySQL + Razorpay",
   "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "migrate": "node migrations/run_phase1.js"
+    "migrate": "node scripts/run_migrations.js",
+    "setup-db": "node scripts/setup_db.js",
+    "lint": "eslint . --ext .js"
   },
-  "keywords": [],
+  "keywords": ["turf", "booking", "express", "razorpay"],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",
@@ -27,5 +31,8 @@
     "mysql2": "^3.18.2",
     "nodemailer": "^8.0.1",
     "razorpay": "^2.9.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
   }
 }

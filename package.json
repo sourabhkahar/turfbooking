@@ -1,0 +1,22 @@
+{
+  "name": "turf-booking",
+  "version": "1.0.0",
+  "description": "Turf Booking — full-stack monorepo (Next.js + Express + MySQL + Razorpay)",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "start:backend": "npm run start --workspace=backend",
+    "start:frontend": "npm run start --workspace=frontend",
+    "build:frontend": "npm run build --workspace=frontend",
+    "lint": "npm run lint --workspace=frontend"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

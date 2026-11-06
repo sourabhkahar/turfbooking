@@ -67,7 +67,6 @@ app.use('/api/financials', financialRoutes);
 app.use('/api/owner', ownerRoutes);
 app.use('/api/upload', uploadRoutes);
 
-
 // Health check
 app.get('/', (req, res) => res.json({ message: 'Turf Booking API is running', status: 'ok' }));
 
@@ -86,4 +85,26 @@ app.use((err, req, res, next) => {
 process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+// Graceful shutdown: finish in-flight requests before exiting
+function shutdown(signal) {
+    console.log(`\n${signal} received — shutting down gracefully`);
+    server.close(() => {
+        console.log('✅ HTTP server closed');
+        // Release DB pool connections
+        const pool = require('./config/db');
+        pool.end().then(() => {
+            console.log('✅ MySQL pool closed');
+            process.exit(0);
+        }).catch(() => process.exit(0));
+    });
+    // Force exit after 10 s if requests are stuck
+    setTimeout(() => {
+        console.error('⚠️  Forcing exit after timeout');
+        process.exit(1);
+    }, 10_000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
